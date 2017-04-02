@@ -41,7 +41,6 @@ type Config struct {
 type Zone struct {
 	Name        string
 	UpstreamNS  string
-	TSigName    string
 	TSigSecret  string
 	AllowedNets []string
 	AllowAnyNet bool
@@ -176,11 +175,31 @@ func (zone *Zone) isIPAllowed(ip net.IP) bool {
 	return false
 }
 
+func (zone *Zone) sendUpdate(upd *dns.Msg) bool {
+	c := new(dns.Client)
+	c.TsigSecret = make(map[string]string)
+	c.TsigSecret[zone.Name] = zone.TSigSecret
+
+	r, _, err := c.Exchange(upd, zone.UpstreamNS)
+
+	if err != nil {
+		log.Printf("Error updating upstream DNS: %s", err)
+		return false
+	} else if r.Rcode != dns.RcodeSuccess {
+		log.Printf("Upstream DNS update failed with error code %s",
+			dns.RcodeToString[r.Rcode])
+		return false
+	}
+
+	return true
+}
+
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
 		name string
 		ok   bool
+		upd  *dns.Msg
 	)
 
 	var remoteIP net.IP
@@ -221,6 +240,9 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
+	upd = new(dns.Msg)
+	upd.SetUpdate(zone.Name)
+
 	for _, rr := range r.Ns {
 		if rr.Header().Name != name {
 			log.Printf("Got record for wrong name %s", rr.Header().Name)
@@ -234,6 +256,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			log.Printf("Got A record for address %s", a.A)
+			upd.Ns = append(upd.Ns, a)
 			continue
 		}
 
@@ -243,11 +266,16 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			log.Printf("Got AAAA record for address %s", aaaa.AAAA)
+			upd.Ns = append(upd.Ns, aaaa)
 			continue
 		}
 
 		m.Rcode = dns.RcodeRefused
 		goto out
+	}
+
+	if !zone.sendUpdate(upd) {
+		m.Rcode = dns.RcodeServerFailure
 	}
 
 out:
