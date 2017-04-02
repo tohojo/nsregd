@@ -4,7 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
-//	"net"
+	"net"
 	"os"
 	"os/signal"
 //	"strconv"
@@ -12,6 +12,8 @@ import (
 	"syscall"
 //	"time"
 
+	"io/ioutil"
+	"encoding/json"
 //	"keydb"
 
 //	"encoding/binary"
@@ -21,15 +23,31 @@ import (
 //	"crypto/sha256"
 
 	"github.com/miekg/dns"
+//	"github.com/spf13/viper"
 )
 
 const dom = "nsregd.example.org."
 
 var (
 	printf     = flag.Bool("print", false, "print replies")
-	keydbfile  = flag.String("keydb", "", "Filename to store keys")
-	keydb *KeyDb
+	conffile   = flag.String("conffile", "", "Config file")
+	config Config
 )
+
+type Config struct {
+	ListenAddr string
+	Zones []Zone
+}
+
+type Zone struct {
+	Name string
+	UpstreamNS string
+	TSigName string
+	TSigSecret string
+	Networks []net.IPNet
+	KeyDbFile string
+	keydb *KeyDb
+}
 
 func fromBase64(s []byte) (buf []byte, err error) {
 	buflen := base64.StdEncoding.DecodedLen(len(s))
@@ -54,7 +72,7 @@ func validName(name string) bool {
 	return dns.CompareDomainName(name, dom) == dns.CountLabel(dom) && dns.CountLabel(name) > dns.CountLabel(dom)
 }
 
-func verifySig(r *dns.Msg) (name string, success bool) {
+func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
 
 	var (
 		sigrr *dns.SIG
@@ -87,7 +105,7 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 		return
 	}
 
-	key, ok := keydb.Get(name)
+	key, ok := zone.keydb.Get(name)
 	if ok {
 		/* Found existing key, verify sig */
 		if key.KeyTag != sigrr.KeyTag {
@@ -106,7 +124,7 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
 			log.Printf("Verified sig for %s", name)
-			keydb.Refresh(name)
+			zone.keydb.Refresh(name)
 			return name, true
 		} else {
 			log.Printf("Failed to verify sig for %s", name)
@@ -132,7 +150,7 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 				Algorithm: keyrr.Algorithm,
 				KeyTag: keyrr.KeyTag(),
 				PublicKey: keyrr.PublicKey,}
-			if keydb.Add(key) {
+			if zone.keydb.Add(key) {
 				return name, true
 			}
 		}
@@ -143,7 +161,7 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 
 
 
-func handleRegd(w dns.ResponseWriter, r *dns.Msg) {
+func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
 		name string
@@ -158,7 +176,7 @@ func handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
-	name, ok = verifySig(r)
+	name, ok = zone.verifySig(r)
 	if !ok {
 		m.Rcode = dns.RcodeNotAuth
 		goto out
@@ -190,19 +208,13 @@ out:
 	}
 }
 
-func serve(net, name, secret string) {
-	switch name {
-	case "":
-		server := &dns.Server{Addr: ":8053", Net: net, TsigSecret: nil}
-		if err := server.ListenAndServe(); err != nil {
-			fmt.Printf("Failed to setup the "+net+" server: %s\n", err.Error())
-		}
-	default:
-		server := &dns.Server{Addr: ":8053", Net: net, TsigSecret: map[string]string{name: secret}}
-		if err := server.ListenAndServe(); err != nil {
-			fmt.Printf("Failed to setup the "+net+" server: %s\n", err.Error())
-		}
+func serve(addr string) {
+	server := &dns.Server{Addr: addr, Net: "tcp"}
+	log.Printf("Starting server on %s (tcp)", addr)
+	if err := server.ListenAndServe(); err != nil {
+		fmt.Printf("Failed to setup the server: %s\n", err.Error())
 	}
+
 }
 
 func main() {
@@ -211,11 +223,30 @@ func main() {
 	}
 	flag.Parse()
 
-	keydb = NewKeyDb(*keydbfile)
+	data, err := ioutil.ReadFile(*conffile)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		log.Print(err.Error())
+		return
+	}
 
-	dns.HandleFunc("example.org.", handleRegd)
-	go serve("tcp", "", "")
-	go serve("udp", "", "")
+	for _,zone := range config.Zones {
+		kdb, err := NewKeyDb(zone.KeyDbFile)
+		if err != nil {
+			return
+		}
+		log.Printf("Configuring zone %s with db file %s", zone.Name, zone.KeyDbFile)
+		zone.keydb = kdb
+		defer kdb.Stop()
+		dns.HandleFunc(zone.Name, zone.handleRegd)
+	}
+
+	go serve(config.ListenAddr)
+
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sig
