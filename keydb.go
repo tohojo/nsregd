@@ -15,7 +15,6 @@ const (
 	refreshKey
 	expireKeys
 
-	timeout = 300 * time.Second
 	expiryInterval = 5 * time.Second
 )
 
@@ -24,6 +23,7 @@ type reqType int
 type KeyDb struct {
 	keys map[string]Key
 	queue chan keyRequest
+	timeout time.Duration
 	keyfile string
 }
 
@@ -56,7 +56,7 @@ func (db *KeyDb) run() {
 		switch req.reqType {
 		case addKey:
 			if _, ok := db.keys[req.key.Name]; !ok {
-				req.key.Expiry = time.Now().Add(timeout)
+				req.key.Expiry = time.Now().Add(db.timeout)
 				db.keys[req.key.Name] = req.key
 				req.resultChan <- Key{}
 			} else {
@@ -72,7 +72,7 @@ func (db *KeyDb) run() {
 
 		case refreshKey:
 			if key,ok := db.keys[req.name]; ok {
-				key.Expiry = time.Now().Add(timeout)
+				key.Expiry = time.Now().Add(db.timeout)
 				req.resultChan <- Key{}
 			} else {
 				close(req.resultChan)
@@ -88,10 +88,11 @@ func (db *KeyDb) run() {
 	}
 }
 
-func NewKeyDb(filename string) (*KeyDb, error) {
+func NewKeyDb(filename string, keytimeout uint) (*KeyDb, error) {
 	db := KeyDb{
 		keys: make(map[string]Key),
 		queue: make(chan keyRequest),
+		timeout: time.Duration(keytimeout) * time.Second,
 		keyfile: filename}
 
 	defer func() {

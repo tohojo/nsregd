@@ -44,6 +44,7 @@ type Zone struct {
 	TSigSecret string
 	Networks []net.IPNet
 	KeyDbFile string
+	KeyTimeout uint
 	keydb *KeyDb
 }
 
@@ -233,7 +234,7 @@ func main() {
 	}
 
 	for _,zone := range config.Zones {
-		kdb, err := NewKeyDb(zone.KeyDbFile)
+		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout)
 		if err != nil {
 			return
 		}
