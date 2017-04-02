@@ -193,15 +193,16 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
-	for _, q := range r.Question {
-		if q.Name != name {
+	for _, rr := range r.Ns {
+		if rr.Header().Name != name {
 			m.Rcode = dns.RcodeRefused
 			goto out
 		}
 
-		switch q.Qtype {
+		typ := rr.Header().Rrtype
+		switch typ {
 		case dns.TypeA, dns.TypeAAAA, dns.TypeKEY:
-			log.Printf("Got %s request", dns.TypeToString[q.Qtype])
+			log.Printf("Got %s request", dns.TypeToString[typ])
 		default:
 			m.Rcode = dns.RcodeRefused
 		}
