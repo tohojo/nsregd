@@ -88,7 +88,7 @@ func (db *KeyDb) run() {
 	}
 }
 
-func NewKeyDb(filename string) *KeyDb {
+func NewKeyDb(filename string) (*KeyDb, error) {
 	db := KeyDb{
 		keys: make(map[string]Key),
 		queue: make(chan keyRequest),
@@ -101,19 +101,21 @@ func NewKeyDb(filename string) *KeyDb {
 
 	if filename != "" {
 		data, err := ioutil.ReadFile(filename)
-		if err != nil {
+		if os.IsNotExist(err) {
+			return &db, nil
+		} else if err != nil {
 			log.Print(err)
-			return &db
+			return &db, err
 		}
 
 		err = json.Unmarshal(data, &db.keys)
 		if err != nil {
 			log.Print(err)
-			return &db
+			return &db, err
 		}
 	}
 
-	return &db
+	return &db, nil
 }
 
 func (db *KeyDb) Stop() {
