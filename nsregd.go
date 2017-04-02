@@ -50,6 +50,10 @@ func toKEY(dk *dns.DNSKEY) *dns.KEY {
 	return k
 }
 
+func validName(name string) bool {
+	return dns.CompareDomainName(name, dom) == dns.CountLabel(dom) && dns.CountLabel(name) > dns.CountLabel(dom)
+}
+
 func verifySig(r *dns.Msg) (name string, success bool) {
 
 	var (
@@ -109,7 +113,8 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
-		if dns.CompareDomainName(name, dom) != dns.CountLabel(dom) {
+		if !validName(name) {
+			log.Printf("Invalid new name %s", name)
 			return
 		}
 		if keyrr == nil {
