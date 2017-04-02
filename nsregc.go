@@ -47,6 +47,8 @@ type Config struct {
 	KeyFile        string
 	PrivateKeyFile string
 	Interfaces     []string
+	ExcludeNets    []string
+	excludedNets   []*net.IPNet
 }
 
 func sign(m *dns.Msg, name string) *dns.Msg {
@@ -96,6 +98,17 @@ func getServer(name string, server string, tcp bool) string {
 	return ""
 }
 
+func excludeIP(ip net.IP) bool {
+
+	for _, net := range config.excludedNets {
+		if net.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func registerZone(zone string, server string) {
 	c := new(dns.Client)
 	c.Net = "tcp"
@@ -119,6 +132,9 @@ func registerZone(zone string, server string) {
 
 		for _, addr := range addrs {
 			ip, _, _ := net.ParseCIDR(addr.String())
+			if excludeIP(ip) {
+				continue
+			}
 			if v4 := ip.To4(); v4 != nil {
 				rr := &dns.A{
 					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA,
@@ -164,6 +180,14 @@ func main() {
 	if err != nil {
 		log.Print(err.Error())
 		return
+	}
+
+	for _, n := range config.ExcludeNets {
+		_, net, err := net.ParseCIDR(n)
+		if err != nil {
+			log.Panic(err)
+		}
+		config.excludedNets = append(config.excludedNets, net)
 	}
 
 	fi, err := os.Open(config.KeyFile)
