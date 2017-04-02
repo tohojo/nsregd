@@ -100,18 +100,41 @@ func registerZone(zone string, server string) {
 	c := new(dns.Client)
 	c.Net = "tcp"
 
-	m := &dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			RecursionDesired: false,
-			Opcode:           dns.OpcodeUpdate},
-		Question: make([]dns.Question, 1),
-	}
+	m := new(dns.Msg)
+	m.SetUpdate(zone)
 
 	name := config.Name + "." + dns.Fqdn(zone)
 
-	m.Question[0] = dns.Question{Name: name,
-		Qtype:  dns.TypeA,
-		Qclass: uint16(dns.ClassINET)}
+	for _, ifname := range config.Interfaces {
+		iface, err := net.InterfaceByName(ifname)
+		if err != nil {
+			log.Printf("Unable to find interface %s", ifname)
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			log.Printf("Unable to get addresses for interface %s", ifname)
+			continue
+		}
+
+		for _, addr := range addrs {
+			ip, _, _ := net.ParseCIDR(addr.String())
+			if v4 := ip.To4(); v4 != nil {
+				rr := &dns.A{
+					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA,
+						Class: dns.ClassINET, Ttl: 300},
+					A: ip}
+				m.Insert([]dns.RR{rr})
+			} else {
+				rr := &dns.AAAA{
+					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA,
+						Class: dns.ClassINET, Ttl: 300},
+					AAAA: ip}
+				m.Insert([]dns.RR{rr})
+			}
+		}
+
+	}
 
 	r, _, err := c.Exchange(sign(m, name), server)
 
