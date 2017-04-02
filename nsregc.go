@@ -161,9 +161,15 @@ func registerZone(zone string, server string) {
 
 	r, _, err := c.Exchange(sign(m, name), server)
 
-	fmt.Println(r)
+	if *printf {
+		fmt.Println(r)
+	}
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal(err)
+	} else if r.Rcode != dns.RcodeSuccess {
+		log.Printf("Update failed with code: %s", dns.RcodeToString[r.Rcode])
+	} else {
+		log.Printf("Successfully registered %d addresses for zone %s", len(m.Ns), zone)
 	}
 
 }
