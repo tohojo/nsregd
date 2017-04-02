@@ -227,20 +227,33 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 			goto out
 		}
 
-		typ := rr.Header().Rrtype
-		switch typ {
-		case dns.TypeA, dns.TypeAAAA, dns.TypeKEY:
-			log.Printf("Got %s request", dns.TypeToString[typ])
-		default:
-			m.Rcode = dns.RcodeRefused
+		if a, ok := rr.(*dns.A); ok {
+			if !zone.AllowAnyNet && !zone.isIPAllowed(a.A) {
+				log.Printf("Got A record %s outside allowed ranges. Skipping.", a.A)
+				continue
+			}
+			log.Printf("Got A record for address %s", a.A)
+			continue
 		}
+
+		if aaaa, ok := rr.(*dns.AAAA); ok {
+			if !zone.AllowAnyNet && !zone.isIPAllowed(aaaa.AAAA) {
+				log.Printf("Got AAAA record %s outside allowed ranges. Skipping.", aaaa.AAAA)
+				continue
+			}
+			log.Printf("Got AAAA record for address %s", aaaa.AAAA)
+			continue
+		}
+
+		m.Rcode = dns.RcodeRefused
+		break
 	}
 
+out:
 	if *printf {
 		fmt.Printf("Sending reply: %v\n", m.String())
 	}
 
-out:
 	err := w.WriteMsg(m)
 	if err != nil {
 		fmt.Printf("error on write: %s\n", err.Error())
