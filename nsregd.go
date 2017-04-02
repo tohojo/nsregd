@@ -76,7 +76,7 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 		return
 	}
 
-	name = sigrr.Hdr.Name
+	name = sigrr.SignerName
 
 	buf, err := r.Pack()
 	if err != nil {
@@ -86,6 +86,7 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 	key, ok := keydb.Get(name)
 	if ok {
 		/* Found existing key, verify sig */
+		log.Printf("Found existing key for %s", name)
 		keyrr = new(dns.KEY)
 		keyrr.Hdr.Name = name
 		keyrr.Hdr.Rrtype = dns.TypeKEY
@@ -96,8 +97,11 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
+			log.Printf("Verified sig for %s", name)
 			keydb.Refresh(name)
 			return name, true
+		} else {
+			log.Printf("Failed to verify sig for %s", name)
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
@@ -105,11 +109,13 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 			return
 		}
 		if keyrr == nil {
+			log.Printf("No existing key found for %s and no KEY record in query", name)
 			return
 		}
 
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
+			log.Printf("Verified sig with new key for %s", name)
 			key = Key{
 				Name: name,
 				Flags: keyrr.Flags,
@@ -134,7 +140,6 @@ func handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		ok bool
 	)
 
-	fmt.Println(r.String())
 	m := new(dns.Msg)
 	m.SetReply(r)
 
@@ -145,14 +150,14 @@ func handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	name, ok = verifySig(r)
 	if !ok {
-		m.Rcode = dns.RcodeBadSig
+		m.Rcode = dns.RcodeNotAuth
 		goto out
 	}
 
 
 	for _, q := range r.Question {
 		if q.Name != name {
-			m.Rcode = dns.RcodeNotAuth
+			m.Rcode = dns.RcodeRefused
 			goto out
 		}
 
