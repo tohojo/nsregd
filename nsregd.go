@@ -149,7 +149,9 @@ func (zone *Zone) isIPAllowed(ip net.IP) bool {
 func (zone *Zone) sendUpdate(upd *dns.Msg) bool {
 	c := new(dns.Client)
 	c.TsigSecret = make(map[string]string)
-	c.TsigSecret[zone.Name] = zone.TSigSecret
+	c.TsigSecret[zone.TSigName] = zone.TSigSecret
+
+	upd.SetTsig(zone.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
 
 	r, _, err := c.Exchange(upd, zone.UpstreamNS)
 
@@ -289,6 +291,7 @@ func main() {
 
 	for _, zone := range config.Zones {
 		zone.Name = dns.Fqdn(zone.Name)
+		zone.Name = dns.TSigName(zone.TSigName)
 
 		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout)
 		if err != nil {
