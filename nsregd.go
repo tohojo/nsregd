@@ -7,9 +7,8 @@ import (
 //	"net"
 	"os"
 	"os/signal"
-	"runtime/pprof"
 //	"strconv"
-	"strings"
+//	"strings"
 	"syscall"
 //	"time"
 
@@ -17,26 +16,19 @@ import (
 
 //	"encoding/binary"
 	"encoding/base64"
-	"crypto/rsa"
-	"crypto/rand"
-	"crypto/sha256"
+//	"crypto/rsa"
+//	"crypto/rand"
+//	"crypto/sha256"
 
-	"crypto"
 	"github.com/miekg/dns"
 )
 
 const dom = "nsregd.example.org."
 
 var (
-	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	printf     = flag.Bool("print", false, "print replies")
-	compress   = flag.Bool("compress", false, "compress replies")
-	tsig       = flag.String("tsig", "", "use MD5 hmac tsig: keyname:base64")
-	keyrr      = dns.DNSKEY{
-		Hdr: dns.RR_Header{Name: dom, Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: 0},
-		Protocol: 3,
-		Algorithm: dns.RSASHA256}
-	privkey crypto.PrivateKey
+	keydbfile  = flag.String("keydb", "", "Filename to store keys")
+	keydb *KeyDb
 )
 
 func fromBase64(s []byte) (buf []byte, err error) {
@@ -46,55 +38,6 @@ func fromBase64(s []byte) (buf []byte, err error) {
 	buf = buf[:n]
 	return
 }
-
-func handleKeyReg(w dns.ResponseWriter, r *dns.Msg, m *dns.Msg) {
-	var (
-		key *dns.KEY
-		tkey *dns.TKEY
-	)
-
-	for _, rr := range r.Extra {
-		if k, ok := rr.(*dns.KEY); ok {
-			if key != nil {
-				m.Rcode = dns.RcodeFormatError
-				return
-			}
-			key = k
-		}
-		if t, ok := rr.(*dns.TKEY); ok {
-			if tkey != nil {
-				m.Rcode = dns.RcodeFormatError
-				return
-			}
-			tkey = t
-		}
-	}
-
-	if key == nil || tkey == nil {
-		m.Rcode = dns.RcodeFormatError
-		return
-	}
-
-	pk := privkey.(*rsa.PrivateKey)
-	encbuf, err := fromBase64([]byte(tkey.Key))
-	if err != nil {
-		fmt.Println("Base64 decode error:", err.Error())
-		m.Rcode = dns.RcodeFormatError
-		return
-	}
-	fmt.Println(encbuf)
-	deckey, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, pk, encbuf, nil)
-	if err != nil {
-		fmt.Println("Decrypt error:", err.Error())
-		m.Rcode = dns.RcodeFormatError
-		return
-	}
-
-	fmt.Println("Got decrypted key:", string(deckey))
-
-}
-
-
 
 func toKEY(dk *dns.DNSKEY) *dns.KEY {
 	k := &dns.KEY{DNSKEY: *dk}
@@ -107,38 +50,125 @@ func toKEY(dk *dns.DNSKEY) *dns.KEY {
 	return k
 }
 
+func verifySig(r *dns.Msg) (name string, success bool) {
+
+	var (
+		sigrr *dns.SIG
+		keyrr *dns.KEY
+	)
+
+	for _, rr := range r.Extra {
+		if k, ok := rr.(*dns.KEY); ok {
+			if keyrr != nil {
+				return
+			}
+			keyrr = k
+		}
+		if s, ok := rr.(*dns.SIG); ok {
+			if sigrr != nil {
+				return
+			}
+			sigrr = s
+		}
+	}
+
+	if sigrr == nil {
+		return
+	}
+
+	name = sigrr.Hdr.Name
+
+	buf, err := r.Pack()
+	if err != nil {
+		return
+	}
+
+	key, ok := keydb.Get(name)
+	if ok {
+		/* Found existing key, verify sig */
+		keyrr = new(dns.KEY)
+		keyrr.Hdr.Name = name
+		keyrr.Hdr.Rrtype = dns.TypeKEY
+		keyrr.Flags = key.Flags
+		keyrr.Protocol = key.Protocol
+		keyrr.Algorithm = key.Algorithm
+		keyrr.PublicKey = key.PublicKey
+
+		err := sigrr.Verify(keyrr, buf)
+		if err == nil {
+			keydb.Refresh(name)
+			return name, true
+		}
+	} else {
+		/* No existing key, keep if in valid dom */
+		if dns.CompareDomainName(name, dom) != dns.CountLabel(dom) {
+			return
+		}
+		if keyrr == nil {
+			return
+		}
+
+		err := sigrr.Verify(keyrr, buf)
+		if err == nil {
+			key = Key{
+				Name: name,
+				Flags: keyrr.Flags,
+				Protocol: keyrr.Protocol,
+				Algorithm: keyrr.Algorithm,
+				PublicKey: keyrr.PublicKey}
+			if keydb.Add(key) {
+				return name, true
+			}
+		}
+	}
+
+	return name, false
+}
+
 
 
 func handleRegd(w dns.ResponseWriter, r *dns.Msg) {
-	/*var (
-		rr dns.RR
-		addr net.IP
-	)*/
+
+	var (
+		name string
+		ok bool
+	)
 
 	fmt.Println(r.String())
 	m := new(dns.Msg)
 	m.SetReply(r)
 
+	if r.MsgHdr.Opcode != dns.OpcodeUpdate {
+		m.Rcode = dns.RcodeRefused
+		goto out
+	}
 
-	switch r.Question[0].Qtype {
-	case dns.TypeTKEY:
-		log.Println("Got TKEY request")
-		handleKeyReg(w, r, m)
-	case dns.TypeKEY:
-		log.Println("Got KEY request")
-		if m.Question[0].Name == dom {
-			m.Answer = append(m.Answer, toKEY(&keyrr))
-		} else {
-			m.Rcode = dns.RcodeNameError
+	name, ok = verifySig(r)
+	if !ok {
+		m.Rcode = dns.RcodeBadSig
+		goto out
+	}
+
+
+	for _, q := range r.Question {
+		if q.Name != name {
+			m.Rcode = dns.RcodeNotAuth
+			goto out
 		}
-	default:
-		log.Println("Got unknown type")
-		m.Rcode = dns.RcodeNotImplemented
+
+		switch q.Qtype {
+		case dns.TypeA, dns.TypeAAAA, dns.TypeKEY:
+			log.Printf("Got %s request", dns.TypeToString[q.Qtype])
+		default:
+			m.Rcode = dns.RcodeRefused
+		}
 	}
 
 	if *printf {
 		fmt.Printf("%v\n", m.String())
 	}
+
+out:
 	err := w.WriteMsg(m)
 	if err != nil {
 		fmt.Printf("error on write: %s\n", err.Error())
@@ -161,33 +191,16 @@ func serve(net, name, secret string) {
 }
 
 func main() {
-	var name, secret string
-	var err error
 	flag.Usage = func() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if *tsig != "" {
-		a := strings.SplitN(*tsig, ":", 2)
-		name, secret = dns.Fqdn(a[0]), a[1] // fqdn the name, which everybody forgets...
-	}
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
 
-	privkey, err = keyrr.Generate(1024)
-	if err != nil {
-		log.Fatal(err)
-	}
+	keydb = NewKeyDb(*keydbfile)
 
 	dns.HandleFunc("example.org.", handleRegd)
-	go serve("tcp", name, secret)
-	go serve("udp", name, secret)
+	go serve("tcp", "", "")
+	go serve("udp", "", "")
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sig
