@@ -131,7 +131,14 @@ func registerZone(zone string, server string) {
 		}
 
 		for _, addr := range addrs {
-			ip, _, _ := net.ParseCIDR(addr.String())
+
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
 			if excludeIP(ip) {
 				continue
 			}
