@@ -167,6 +167,10 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		ok   bool
 	)
 
+	if *printf {
+		fmt.Printf("Received msg: %s", r)
+	}
+
 	m := new(dns.Msg)
 	m.SetReply(r)
 
@@ -209,7 +213,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if *printf {
-		fmt.Printf("%v\n", m.String())
+		fmt.Printf("Sending reply: %v\n", m.String())
 	}
 
 out:
