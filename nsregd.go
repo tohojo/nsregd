@@ -223,6 +223,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	for _, rr := range r.Ns {
 		if rr.Header().Name != name {
+			log.Printf("Got record for wrong name %s", rr.Header().Name)
 			m.Rcode = dns.RcodeRefused
 			goto out
 		}
@@ -246,7 +247,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		m.Rcode = dns.RcodeRefused
-		break
+		goto out
 	}
 
 out:
