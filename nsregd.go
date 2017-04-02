@@ -43,8 +43,9 @@ type Zone struct {
 	UpstreamNS  string
 	TSigName    string
 	TSigSecret  string
-	Networks    []net.IPNet
+	AllowedNets []string
 	AllowAnyNet bool
+	allowedNets []*net.IPNet
 	KeyDbFile   string
 	KeyTimeout  uint
 	keydb       *KeyDb
@@ -73,7 +74,7 @@ func (zone *Zone) validName(name string) bool {
 	return dns.CompareDomainName(name, zone.Name) == dns.CountLabel(zone.Name) && dns.CountLabel(name) > dns.CountLabel(zone.Name)
 }
 
-func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
+func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bool) {
 
 	var (
 		sigrr *dns.SIG
@@ -132,6 +133,10 @@ func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
+		if !ipAllowed {
+			log.Printf("Remote addr not allowed to add new key")
+			return
+		}
 		if !zone.validName(name) {
 			log.Printf("Invalid new name %s", name)
 			return
@@ -160,6 +165,17 @@ func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
 	return name, false
 }
 
+func (zone *Zone) isIPAllowed(ip net.IP) bool {
+
+	for _, net := range zone.allowedNets {
+		if net.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
@@ -167,8 +183,16 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		ok   bool
 	)
 
+	var remoteIP net.IP
+	switch v := w.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		remoteIP = v.IP
+	case *net.UDPAddr:
+		remoteIP = v.IP
+	}
+
 	if *printf {
-		fmt.Printf("Received msg: %s", r)
+		fmt.Printf("Received msg from %s: %s", remoteIP, r)
 	}
 
 	m := new(dns.Msg)
@@ -191,7 +215,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
-	name, ok = zone.verifySig(r)
+	name, ok = zone.verifySig(r, zone.isIPAllowed(remoteIP))
 	if !ok {
 		m.Rcode = dns.RcodeNotAuth
 		goto out
@@ -258,6 +282,15 @@ func main() {
 		log.Printf("Configuring zone %s with db file %s", zone.Name, zone.KeyDbFile)
 		zone.keydb = kdb
 		defer kdb.Stop()
+
+		for _, n := range zone.AllowedNets {
+			_, net, err := net.ParseCIDR(n)
+			if err != nil {
+				log.Panic(err)
+			}
+			zone.allowedNets = append(zone.allowedNets, net)
+		}
+
 		dns.HandleFunc(zone.Name, zone.handleRegd)
 	}
 
