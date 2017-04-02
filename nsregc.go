@@ -86,11 +86,9 @@ func main() {
 	keyrr.Hdr.Name = domain
 	keyrr.Hdr.Rrtype = dns.TypeKEY
 	keyrr.Hdr.Class = dns.ClassINET
-	keyrr.Algorithm = dns.RSASHA256
+	keyrr.Algorithm = dns.ECDSAP256SHA256
 
-	pk, err := keyrr.Generate(2048)
-
-	fmt.Println(keyrr)
+	pk, err := keyrr.Generate(256)
 
 	if err != nil {
 		fmt.Println(err.Error())
