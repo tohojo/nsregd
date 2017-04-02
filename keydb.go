@@ -32,6 +32,7 @@ type Key struct {
 	Flags uint16 `json:"flags"`
 	Protocol uint8 `json:"protocol"`
 	Algorithm uint8 `json:"algorithm"`
+	KeyTag uint16 `json:"keytag"`
 	PublicKey string `json:"pubkey"`
 	Expiry time.Time `json:"expiry"`
 }

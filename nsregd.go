@@ -86,6 +86,10 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 	key, ok := keydb.Get(name)
 	if ok {
 		/* Found existing key, verify sig */
+		if key.KeyTag != sigrr.KeyTag {
+			log.Printf("Existing key for %s has different keytag than SIG", name)
+			return
+		}
 		log.Printf("Found existing key for %s", name)
 		keyrr = new(dns.KEY)
 		keyrr.Hdr.Name = name
@@ -121,7 +125,8 @@ func verifySig(r *dns.Msg) (name string, success bool) {
 				Flags: keyrr.Flags,
 				Protocol: keyrr.Protocol,
 				Algorithm: keyrr.Algorithm,
-				PublicKey: keyrr.PublicKey}
+				KeyTag: keyrr.KeyTag(),
+				PublicKey: keyrr.PublicKey,}
 			if keydb.Add(key) {
 				return name, true
 			}
