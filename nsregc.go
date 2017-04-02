@@ -1,4 +1,4 @@
-package nsregc
+package main
 
 import (
 	"flag"
