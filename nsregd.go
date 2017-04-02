@@ -8,46 +8,46 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-//	"strings"
+	//	"strings"
 	"syscall"
-//	"time"
+	//	"time"
 
-	"io/ioutil"
 	"encoding/json"
-//	"keydb"
+	"io/ioutil"
+	//	"keydb"
 
-//	"encoding/binary"
+	//	"encoding/binary"
 	"encoding/base64"
-//	"crypto/rsa"
-//	"crypto/rand"
-//	"crypto/sha256"
+	//	"crypto/rsa"
+	//	"crypto/rand"
+	//	"crypto/sha256"
 
 	"github.com/miekg/dns"
-//	"github.com/spf13/viper"
+	//	"github.com/spf13/viper"
 )
 
 var (
-	printf     = flag.Bool("print", false, "print replies")
-	conffile   = flag.String("conffile", "", "Config file")
-	config Config
+	printf   = flag.Bool("print", false, "print replies")
+	conffile = flag.String("conffile", "", "Config file")
+	config   Config
 )
 
 type Config struct {
 	ListenAddr string
 	ListenPort int
-	Zones []Zone
+	Zones      []Zone
 }
 
 type Zone struct {
-	Name string
-	UpstreamNS string
-	TSigName string
-	TSigSecret string
-	Networks []net.IPNet
+	Name        string
+	UpstreamNS  string
+	TSigName    string
+	TSigSecret  string
+	Networks    []net.IPNet
 	AllowAnyNet bool
-	KeyDbFile string
-	KeyTimeout uint
-	keydb *KeyDb
+	KeyDbFile   string
+	KeyTimeout  uint
+	keydb       *KeyDb
 }
 
 func fromBase64(s []byte) (buf []byte, err error) {
@@ -145,12 +145,12 @@ func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
 		if err == nil {
 			log.Printf("Verified sig with new key for %s", name)
 			key = Key{
-				Name: name,
-				Flags: keyrr.Flags,
-				Protocol: keyrr.Protocol,
+				Name:      name,
+				Flags:     keyrr.Flags,
+				Protocol:  keyrr.Protocol,
 				Algorithm: keyrr.Algorithm,
-				KeyTag: keyrr.KeyTag(),
-				PublicKey: keyrr.PublicKey,}
+				KeyTag:    keyrr.KeyTag(),
+				PublicKey: keyrr.PublicKey}
 			if zone.keydb.Add(key) {
 				return name, true
 			}
@@ -160,13 +160,11 @@ func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
 	return name, false
 }
 
-
-
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
 		name string
-		ok bool
+		ok   bool
 	)
 
 	m := new(dns.Msg)
@@ -177,7 +175,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		rr := &dns.SRV{
 			Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeSRV,
 				Class: dns.ClassINET, Ttl: 0},
-			Port: uint16(config.ListenPort),
+			Port:   uint16(config.ListenPort),
 			Target: dns.Fqdn(config.ListenAddr),
 		}
 		m.Answer = append(m.Answer, rr)
@@ -194,7 +192,6 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		m.Rcode = dns.RcodeNotAuth
 		goto out
 	}
-
 
 	for _, q := range r.Question {
 		if q.Name != name {
@@ -248,7 +245,7 @@ func main() {
 		return
 	}
 
-	for _,zone := range config.Zones {
+	for _, zone := range config.Zones {
 		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout)
 		if err != nil {
 			return
