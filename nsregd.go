@@ -6,24 +6,14 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"strconv"
-	//	"strings"
 	"syscall"
-	//	"time"
 
 	"encoding/json"
 	"io/ioutil"
-	//	"keydb"
-
-	//	"encoding/binary"
-	//	"encoding/base64"
-	//	"crypto/rsa"
-	//	"crypto/rand"
-	//	"crypto/sha256"
+	"os/signal"
 
 	"github.com/miekg/dns"
-	//	"github.com/spf13/viper"
 )
 
 var (

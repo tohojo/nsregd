@@ -1,29 +1,18 @@
 package main
 
 import (
+	"crypto"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	//	"os/signal"
 	"strconv"
-	//	"strings"
-	//	"syscall"
 	"time"
-	//	"math/big"
 
-	//	"keydb"
 	"encoding/json"
 	"io/ioutil"
 
-	//	"encoding/binary"
-	//	"encoding/base64"
-	//	"crypto/rsa"
-	//	"crypto/rand"
-	//	"crypto/sha256"
-
-	"crypto"
 	"github.com/miekg/dns"
 )
 
