@@ -226,7 +226,7 @@ func main() {
 			nameserver = arg
 			continue
 		}
-		zones = append(zones, arg)
+		zones = append(zones, dns.Fqdn(arg))
 	}
 	if len(nameserver) == 0 {
 		conf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
