@@ -17,7 +17,7 @@ import (
 	//	"keydb"
 
 	//	"encoding/binary"
-	"encoding/base64"
+	//	"encoding/base64"
 	//	"crypto/rsa"
 	//	"crypto/rand"
 	//	"crypto/sha256"
@@ -48,25 +48,6 @@ type Zone struct {
 	KeyDbFile   string
 	KeyTimeout  uint
 	keydb       *KeyDb
-}
-
-func fromBase64(s []byte) (buf []byte, err error) {
-	buflen := base64.StdEncoding.DecodedLen(len(s))
-	buf = make([]byte, buflen)
-	n, err := base64.StdEncoding.Decode(buf, s)
-	buf = buf[:n]
-	return
-}
-
-func toKEY(dk *dns.DNSKEY) *dns.KEY {
-	k := &dns.KEY{DNSKEY: *dk}
-	k.Hdr = *new(dns.RR_Header)
-	k.Hdr.Name = dk.Hdr.Name
-	k.Hdr.Rrtype = dns.TypeKEY
-	k.Hdr.Class = dk.Hdr.Class
-	k.Hdr.Ttl = dk.Hdr.Ttl
-	k.Hdr.Rdlength = dk.Hdr.Rdlength
-	return k
 }
 
 func (zone *Zone) validName(name string) bool {
