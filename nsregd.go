@@ -26,8 +26,6 @@ import (
 //	"github.com/spf13/viper"
 )
 
-const dom = "nsregd.example.org."
-
 var (
 	printf     = flag.Bool("print", false, "print replies")
 	conffile   = flag.String("conffile", "", "Config file")
@@ -68,8 +66,8 @@ func toKEY(dk *dns.DNSKEY) *dns.KEY {
 	return k
 }
 
-func validName(name string) bool {
-	return dns.CompareDomainName(name, dom) == dns.CountLabel(dom) && dns.CountLabel(name) > dns.CountLabel(dom)
+func (zone *Zone) validName(name string) bool {
+	return dns.CompareDomainName(name, zone.Name) == dns.CountLabel(zone.Name) && dns.CountLabel(name) > dns.CountLabel(zone.Name)
 }
 
 func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
@@ -131,7 +129,7 @@ func (zone *Zone) verifySig(r *dns.Msg) (name string, success bool) {
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
-		if !validName(name) {
+		if !zone.validName(name) {
 			log.Printf("Invalid new name %s", name)
 			return
 		}
@@ -252,35 +250,4 @@ func main() {
 	s := <-sig
 	fmt.Printf("Signal (%s) received, stopping\n", s)
 
-/*	keydb := keydb.New("test.json")
-	if secret, ok := keydb.Get("test"); ok {
-		fmt.Printf("Key for test: %s\n", secret)
-	}
-	if secret, ok := keydb.Get("test3"); ok {
-		fmt.Printf("Key for test3: %s\n", secret)
-	}
-	if ok := keydb.Add("test", "testing"); ok {
-		fmt.Println("Added key for test")
-	}
-	if ok := keydb.Add("test", "testing"); ok {
-		fmt.Println("Added key for test")
-	} else {
-		fmt.Println("Failed adding key for test")
-	}
-	if secret, ok := keydb.Get("test"); ok {
-		fmt.Printf("Key for test: %s\n", secret)
-	}
-	if _, ok := keydb.Get("test2"); !ok {
-		fmt.Println("No key found for test2")
-	}
-	keydb.Add("test3", "meep")
-/*	time.Sleep(3 * time.Second)
-	keydb.Refresh("test")
-	time.Sleep(3 * time.Second)
-	if secret, ok := keydb.Get("test"); ok {
-		fmt.Printf("Key for test: %s\n", secret)
-	} else {
-		fmt.Println("No key found for test")
-	}
-*/	//keydb.Stop()
 }
