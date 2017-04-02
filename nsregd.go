@@ -7,7 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
-//	"strconv"
+	"strconv"
 //	"strings"
 	"syscall"
 //	"time"
@@ -34,6 +34,7 @@ var (
 
 type Config struct {
 	ListenAddr string
+	ListenPort int
 	Zones []Zone
 }
 
@@ -43,6 +44,7 @@ type Zone struct {
 	TSigName string
 	TSigSecret string
 	Networks []net.IPNet
+	AllowAnyNet bool
 	KeyDbFile string
 	KeyTimeout uint
 	keydb *KeyDb
@@ -170,6 +172,18 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 
+	if r.MsgHdr.Opcode == dns.OpcodeQuery && r.Question[0].Qtype == dns.TypeSRV {
+		q := r.Question[0]
+		rr := &dns.SRV{
+			Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeSRV,
+				Class: dns.ClassINET, Ttl: 0},
+			Port: uint16(config.ListenPort),
+			Target: dns.Fqdn(config.ListenAddr),
+		}
+		m.Answer = append(m.Answer, rr)
+		goto out
+	}
+
 	if r.MsgHdr.Opcode != dns.OpcodeUpdate {
 		m.Rcode = dns.RcodeRefused
 		goto out
@@ -207,9 +221,10 @@ out:
 	}
 }
 
-func serve(addr string) {
-	server := &dns.Server{Addr: addr, Net: "tcp"}
-	log.Printf("Starting server on %s (tcp)", addr)
+func serve(addr string, port int) {
+	laddr := addr + ":" + strconv.Itoa(port)
+	server := &dns.Server{Addr: laddr, Net: "tcp"}
+	log.Printf("Starting server on %s (tcp)", laddr)
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Printf("Failed to setup the server: %s\n", err.Error())
 	}
@@ -244,7 +259,7 @@ func main() {
 		dns.HandleFunc(zone.Name, zone.handleRegd)
 	}
 
-	go serve(config.ListenAddr)
+	go serve(config.ListenAddr, config.ListenPort)
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
