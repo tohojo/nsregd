@@ -289,6 +289,8 @@ func main() {
 	}
 
 	for _, zone := range config.Zones {
+		zone.Name = dns.Fqdn(zone.Name)
+
 		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout)
 		if err != nil {
 			return
