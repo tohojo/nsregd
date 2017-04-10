@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"syscall"
+	"time"
 
 	"encoding/json"
 	"io/ioutil"
@@ -30,14 +31,27 @@ type Config struct {
 
 type Zone struct {
 	Name        string
-	UpstreamNS  string
-	TSigSecret  string
+	Upstreams   []Upstream
 	AllowedNets []string
 	AllowAnyNet bool
 	allowedNets []*net.IPNet
 	KeyDbFile   string
 	KeyTimeout  uint
 	keydb       *KeyDb
+}
+
+type Upstream interface {
+	sendUpdate(records []dns.RR) bool
+	parseArgs()
+}
+
+type NSUpstream struct {
+	Type       string
+	Hostname   string
+	Port       uint16
+	Zone       string
+	TSigName   string
+	TSigSecret string
 }
 
 func (zone *Zone) validName(name string) bool {
@@ -146,14 +160,27 @@ func (zone *Zone) isIPAllowed(ip net.IP) bool {
 	return false
 }
 
-func (zone *Zone) sendUpdate(upd *dns.Msg) bool {
+func (zone *Zone) sendUpdates(records []dns.RR) bool {
+	success := true
+	for _, u := range zone.Upstreams {
+		success = success && u.sendUpdate(records)
+	}
+	return success
+}
+
+func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
+	upd := new(dns.Msg)
+	upd.SetUpdate(nsup.Zone)
+
 	c := new(dns.Client)
 	c.TsigSecret = make(map[string]string)
-	c.TsigSecret[zone.TSigName] = zone.TSigSecret
+	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
 
-	upd.SetTsig(zone.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
+	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
 
-	r, _, err := c.Exchange(upd, zone.UpstreamNS)
+	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
+
+	r, _, err := c.Exchange(upd, hostname)
 
 	if err != nil {
 		log.Printf("Error updating upstream DNS: %s", err)
@@ -167,12 +194,17 @@ func (zone *Zone) sendUpdate(upd *dns.Msg) bool {
 	return true
 }
 
+func (nsup *NSUpstream) parseArgs() {
+	nsup.TSigName = dns.Fqdn(nsup.TSigName)
+	nsup.Zone = dns.Fqdn(nsup.Zone)
+}
+
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
-		name string
-		ok   bool
-		upd  *dns.Msg
+		name    string
+		ok      bool
+		records []dns.RR
 	)
 
 	var remoteIP net.IP
@@ -213,8 +245,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
-	upd = new(dns.Msg)
-	upd.SetUpdate(zone.Name)
+	records = make([]dns.RR, 0)
 
 	for _, rr := range r.Ns {
 		if rr.Header().Name != name {
@@ -229,7 +260,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			log.Printf("Got A record for address %s", a.A)
-			upd.Ns = append(upd.Ns, a)
+			records = append(records, a)
 			continue
 		}
 
@@ -239,7 +270,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			log.Printf("Got AAAA record for address %s", aaaa.AAAA)
-			upd.Ns = append(upd.Ns, aaaa)
+			records = append(records, aaaa)
 			continue
 		}
 
@@ -247,7 +278,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
-	if !zone.sendUpdate(upd) {
+	if !zone.sendUpdates(records) {
 		m.Rcode = dns.RcodeServerFailure
 	}
 
@@ -291,7 +322,10 @@ func main() {
 
 	for _, zone := range config.Zones {
 		zone.Name = dns.Fqdn(zone.Name)
-		zone.Name = dns.TSigName(zone.TSigName)
+
+		for _, upstream := range zone.Upstreams {
+			upstream.parseArgs()
+		}
 
 		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout)
 		if err != nil {
