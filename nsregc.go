@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	srvname = "_nsregd._tcp"
+	srvname = "_nsreg._tcp"
 )
 
 var (
