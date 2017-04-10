@@ -54,6 +54,37 @@ type NSUpstream struct {
 	TSigSecret string
 }
 
+func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
+	upd := new(dns.Msg)
+	upd.SetUpdate(nsup.Zone)
+
+	c := new(dns.Client)
+	c.TsigSecret = make(map[string]string)
+	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
+
+	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
+
+	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
+
+	r, _, err := c.Exchange(upd, hostname)
+
+	if err != nil {
+		log.Printf("Error updating upstream DNS: %s", err)
+		return false
+	} else if r.Rcode != dns.RcodeSuccess {
+		log.Printf("Upstream DNS update failed with error code %s",
+			dns.RcodeToString[r.Rcode])
+		return false
+	}
+
+	return true
+}
+
+func (nsup *NSUpstream) parseArgs() {
+	nsup.TSigName = dns.Fqdn(nsup.TSigName)
+	nsup.Zone = dns.Fqdn(nsup.Zone)
+}
+
 func (zone *Zone) validName(name string) bool {
 	return dns.CompareDomainName(name, zone.Name) == dns.CountLabel(zone.Name) && dns.CountLabel(name) > dns.CountLabel(zone.Name)
 }
@@ -166,37 +197,6 @@ func (zone *Zone) sendUpdates(records []dns.RR) bool {
 		success = success && u.sendUpdate(records)
 	}
 	return success
-}
-
-func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
-	upd := new(dns.Msg)
-	upd.SetUpdate(nsup.Zone)
-
-	c := new(dns.Client)
-	c.TsigSecret = make(map[string]string)
-	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
-
-	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
-
-	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
-
-	r, _, err := c.Exchange(upd, hostname)
-
-	if err != nil {
-		log.Printf("Error updating upstream DNS: %s", err)
-		return false
-	} else if r.Rcode != dns.RcodeSuccess {
-		log.Printf("Upstream DNS update failed with error code %s",
-			dns.RcodeToString[r.Rcode])
-		return false
-	}
-
-	return true
-}
-
-func (nsup *NSUpstream) parseArgs() {
-	nsup.TSigName = dns.Fqdn(nsup.TSigName)
-	nsup.Zone = dns.Fqdn(nsup.Zone)
 }
 
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
