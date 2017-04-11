@@ -199,6 +199,19 @@ func (zone *Zone) sendUpdates(records []dns.RR) bool {
 	return success
 }
 
+func (zone *Zone) removeName(name string) bool {
+	success := true
+
+	records := make([]dns.RR, 1)
+	records[1] = &dns.ANY{Hdr: dns.RR_Header{Name: name, Ttl: 0, Rrtype: dns.TypeANY, Class: dns.ClassANY}}
+
+	for _, u := range zone.Upstreams {
+		success = success && u.sendUpdate(records)
+	}
+
+	return success
+}
+
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
@@ -333,6 +346,7 @@ func main() {
 		}
 		log.Printf("Configuring zone %s with db file %s", zone.Name, zone.KeyDbFile)
 		zone.keydb = kdb
+		kdb.expireCallback = zone.removeName
 		defer kdb.Stop()
 
 		for _, n := range zone.AllowedNets {

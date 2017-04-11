@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"io/ioutil"
+	"log"
 	"os"
 	"time"
 )
@@ -21,20 +21,21 @@ const (
 type reqType int
 
 type KeyDb struct {
-	keys map[string]Key
-	queue chan keyRequest
-	timeout time.Duration
-	keyfile string
+	keys           map[string]Key
+	queue          chan keyRequest
+	timeout        time.Duration
+	keyfile        string
+	expireCallback func(name string) bool
 }
 
 type Key struct {
-	Name string `json:"name"`
-	Flags uint16 `json:"flags"`
-	Protocol uint8 `json:"protocol"`
-	Algorithm uint8 `json:"algorithm"`
-	KeyTag uint16 `json:"keytag"`
-	PublicKey string `json:"pubkey"`
-	Expiry time.Time `json:"expiry"`
+	Name      string    `json:"name"`
+	Flags     uint16    `json:"flags"`
+	Protocol  uint8     `json:"protocol"`
+	Algorithm uint8     `json:"algorithm"`
+	KeyTag    uint16    `json:"keytag"`
+	PublicKey string    `json:"pubkey"`
+	Expiry    time.Time `json:"expiry"`
 }
 
 type keyRequest struct {
@@ -45,7 +46,7 @@ type keyRequest struct {
 }
 
 func (db *KeyDb) run() {
-	go func () {
+	go func() {
 		for {
 			time.Sleep(expiryInterval)
 			db.queue <- keyRequest{reqType: expireKeys}
@@ -71,7 +72,7 @@ func (db *KeyDb) run() {
 			}
 
 		case refreshKey:
-			if key,ok := db.keys[req.name]; ok {
+			if key, ok := db.keys[req.name]; ok {
 				key.Expiry = time.Now().Add(db.timeout)
 				req.resultChan <- Key{}
 			} else {
@@ -81,6 +82,7 @@ func (db *KeyDb) run() {
 		case expireKeys:
 			for name, key := range db.keys {
 				if key.Expiry.Before(time.Now()) {
+					db.expireCallback(name)
 					delete(db.keys, name)
 				}
 			}
@@ -90,8 +92,8 @@ func (db *KeyDb) run() {
 
 func NewKeyDb(filename string, keytimeout uint) (*KeyDb, error) {
 	db := KeyDb{
-		keys: make(map[string]Key),
-		queue: make(chan keyRequest),
+		keys:    make(map[string]Key),
+		queue:   make(chan keyRequest),
 		timeout: time.Duration(keytimeout) * time.Second,
 		keyfile: filename}
 
@@ -149,30 +151,30 @@ func (db *KeyDb) Stop() {
 
 func (db *KeyDb) Add(key Key) bool {
 	req := keyRequest{
-		reqType: addKey,
-		key: key,
+		reqType:    addKey,
+		key:        key,
 		resultChan: make(chan Key)}
 	db.queue <- req
-	_, ok := <- req.resultChan
+	_, ok := <-req.resultChan
 	return ok
 }
 
 func (db *KeyDb) Get(name string) (Key, bool) {
 	req := keyRequest{
-		reqType: getKey,
-		name: name,
+		reqType:    getKey,
+		name:       name,
 		resultChan: make(chan Key)}
 	db.queue <- req
-	key, ok := <- req.resultChan
+	key, ok := <-req.resultChan
 	return key, ok
 }
 
 func (db *KeyDb) Refresh(name string) bool {
 	req := keyRequest{
-		reqType: refreshKey,
-		name: name,
+		reqType:    refreshKey,
+		name:       name,
 		resultChan: make(chan Key)}
 	db.queue <- req
-	_, ok := <- req.resultChan
+	_, ok := <-req.resultChan
 	return ok
 }
