@@ -29,13 +29,13 @@ type KeyDb struct {
 }
 
 type Key struct {
-	Name      string    `json:"name"`
-	Flags     uint16    `json:"flags"`
-	Protocol  uint8     `json:"protocol"`
-	Algorithm uint8     `json:"algorithm"`
-	KeyTag    uint16    `json:"keytag"`
-	PublicKey string    `json:"pubkey"`
-	Expiry    time.Time `json:"expiry"`
+	Name      string
+	Flags     uint16
+	Protocol  uint8
+	Algorithm uint8
+	KeyTag    uint16
+	PublicKey string
+	Expiry    time.Time
 }
 
 type keyRequest struct {
