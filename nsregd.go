@@ -19,6 +19,7 @@ import (
 
 var (
 	printf   = flag.Bool("print", false, "print replies")
+	keep     = flag.Bool("keep", false, "do not flush entries from upstreams on shutdown")
 	conffile = flag.String("conffile", "", "Config file")
 	config   Config
 )
@@ -38,6 +39,7 @@ type Zone struct {
 	KeyDbFile   string
 	KeyTimeout  uint
 	keydb       *KeyDb
+	cache       *Cache
 }
 
 type Upstream interface {
@@ -212,6 +214,21 @@ func (zone *Zone) removeName(name string) bool {
 	return success
 }
 
+func (zone *Zone) removeRR(rr dns.RR) bool {
+	success := true
+
+	records := make([]dns.RR, 1)
+	rr.Header().Class = dns.ClassNONE
+	rr.Header().Ttl = 0
+	records[1] = rr
+
+	for _, u := range zone.Upstreams {
+		success = success && u.sendUpdate(records)
+	}
+
+	return success
+}
+
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
@@ -258,7 +275,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		goto out
 	}
 
-	records = make([]dns.RR, 0)
+	records = make([]dns.RR, 0, len(r.Ns))
 
 	for _, rr := range r.Ns {
 		if rr.Header().Name != name {
@@ -273,7 +290,9 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			log.Printf("Got A record for address %s", a.A)
-			records = append(records, a)
+			if zone.cache.Add(rr) {
+				records = append(records, a)
+			}
 			continue
 		}
 
@@ -283,7 +302,9 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			log.Printf("Got AAAA record for address %s", aaaa.AAAA)
-			records = append(records, aaaa)
+			if zone.cache.Add(rr) {
+				records = append(records, aaaa)
+			}
 			continue
 		}
 
@@ -348,6 +369,10 @@ func main() {
 		zone.keydb = kdb
 		kdb.expireCallback = zone.removeName
 		defer kdb.Stop()
+
+		zone.cache = &Cache{expireCallback: zone.removeRR}
+		zone.cache.Init()
+		defer zone.cache.Flush(!*keep)
 
 		for _, n := range zone.AllowedNets {
 			_, net, err := net.ParseCIDR(n)

@@ -63,7 +63,7 @@ func (s CacheSlice) Remove(e *CacheEntry) CacheSlice {
 	return s
 }
 
-func (c *Cache) init() {
+func (c *Cache) Init() {
 	c.entries = make(map[string]CacheSlice)
 	c.expiryList = make(CacheSlice, 0, 10)
 	c.queue = make(chan CacheRequest)
@@ -128,7 +128,7 @@ func (c *Cache) run() {
 				c.expiryList = append(c.expiryList, nc[0])
 			}
 			sort.Sort(c.expiryList)
-			req.reply <- found
+			req.reply <- !found
 		case expireRRs:
 			for now := time.Now(); len(c.expiryList) > 0 && c.expiryList[0].expiry.Before(now); {
 				e := c.expiryList[0]
@@ -155,4 +155,12 @@ func (c *Cache) Add(rr dns.RR) bool {
 	}
 	c.queue <- req
 	return <-reply
+}
+
+func (c *Cache) Flush(runCallback bool) {
+	if runCallback {
+		for _, e := range c.expiryList {
+			c.expireCallback(e.rr)
+		}
+	}
 }
