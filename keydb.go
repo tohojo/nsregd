@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	addKey reqType = iota
+	addKey keyReqType = iota
 	getKey
 	refreshKey
 	expireKeys
@@ -18,7 +18,7 @@ const (
 	expiryInterval = 5 * time.Second
 )
 
-type reqType int
+type keyReqType int
 
 type KeyDb struct {
 	keys           map[string]Key
@@ -39,7 +39,7 @@ type Key struct {
 }
 
 type keyRequest struct {
-	reqType    reqType
+	reqType    keyReqType
 	name       string
 	key        Key
 	resultChan chan Key
