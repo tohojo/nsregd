@@ -180,8 +180,8 @@ func (c *Cache) run() {
 				c.expiryList = c.expiryList[1:]
 
 				name := e.rr.Header().Name
-				c.ExpireCallback(e.rr)
 				c.entries[name] = c.entries[name].Remove(e)
+				go c.ExpireCallback(e.rr)
 			}
 		}
 	}

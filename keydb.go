@@ -80,8 +80,8 @@ func (db *KeyDb) run() {
 		case expireKeys:
 			for name, key := range db.keys {
 				if key.Expiry.Before(time.Now()) {
-					db.expireCallback(name)
 					delete(db.keys, name)
+					go db.expireCallback(name)
 				}
 			}
 		}
