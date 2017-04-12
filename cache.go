@@ -137,8 +137,8 @@ func (c *Cache) removeRR(rr dns.RR) bool {
 	if nc, ok := c.entries[name]; ok {
 		for _, e := range nc {
 			if same(e.rr, rr) {
-				nc.Remove(e)
-				c.expiryList.Remove(e)
+				c.entries[name] = nc.Remove(e)
+				c.expiryList = c.expiryList.Remove(e)
 				return true
 			}
 		}
@@ -149,7 +149,7 @@ func (c *Cache) removeRR(rr dns.RR) bool {
 func (c *Cache) removeName(name string) bool {
 	if nc, ok := c.entries[name]; ok {
 		for _, e := range nc {
-			c.expiryList.Remove(e)
+			c.expiryList = c.expiryList.Remove(e)
 		}
 		delete(c.entries, name)
 		return true
