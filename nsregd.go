@@ -256,6 +256,16 @@ func (zone *Zone) removeRR(rr dns.RR) bool {
 	return success
 }
 
+func getIP(rr dns.RR) net.IP {
+	if a, ok := rr.(*dns.A); ok {
+		return a.A
+	}
+	if aaaa, ok := rr.(*dns.AAAA); ok {
+		return aaaa.AAAA
+	}
+	return nil
+}
+
 func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	var (
@@ -311,42 +321,37 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 			goto out
 		}
 
-		if a, ok := rr.(*dns.A); ok {
-			if !zone.AllowAnyNet && !zone.isIPAllowed(a.A) {
-				log.Printf("Got A record %s outside allowed ranges. Skipping.", a.A)
+		switch rr.Header().Rrtype {
+		case dns.TypeA, dns.TypeAAAA:
+			ip := getIP(rr)
+			t := dns.TypeToString[rr.Header().Rrtype]
+			ttl := rr.Header().Ttl
+			if !zone.AllowAnyNet && !zone.isIPAllowed(ip) {
+				log.Printf("Got %s record for %s outside allowed ranges. Skipping.",
+					t, ip)
 				continue
 			}
-			if zone.cache.Add(rr) {
-				log.Printf("Got new A record for address %s with TTL %d",
-					a.A, a.Hdr.Ttl)
-				records = append(records, a)
+			if ttl == 0 {
+				if rr.Header().Class != dns.ClassNONE {
+					m.Rcode = dns.RcodeFormatError
+					goto out
+				}
+				log.Printf("Got removal for %s record for address %s", t, ip)
+				zone.cache.Remove(rr)
+			} else if zone.cache.Add(rr) {
+				log.Printf("Got new %s record for address %s with TTL %d",
+					t, ip, ttl)
+				records = append(records, rr)
 			} else {
-				log.Printf("Refreshed A record for address %s with TTL %d",
-					a.A, a.Hdr.Ttl)
+				log.Printf("Refreshed %s record for address %s with TTL %d",
+					t, ip, ttl)
 			}
-			m.Answer = append(m.Answer, a)
-			continue
+			m.Answer = append(m.Answer, rr)
+		default:
+			m.Rcode = dns.RcodeRefused
+			goto out
 		}
 
-		if aaaa, ok := rr.(*dns.AAAA); ok {
-			if !zone.AllowAnyNet && !zone.isIPAllowed(aaaa.AAAA) {
-				log.Printf("Got AAAA record %s outside allowed ranges. Skipping.", aaaa.AAAA)
-				continue
-			}
-			if zone.cache.Add(rr) {
-				log.Printf("Got new AAAA record for address %s with TTL %d",
-					aaaa.AAAA, aaaa.Hdr.Ttl)
-				records = append(records, aaaa)
-			} else {
-				log.Printf("Refreshed AAAA record for address %s with TTL %d",
-					aaaa.AAAA, aaaa.Hdr.Ttl)
-			}
-			m.Answer = append(m.Answer, aaaa)
-			continue
-		}
-
-		m.Rcode = dns.RcodeRefused
-		goto out
 	}
 
 	if !zone.sendUpdates(records) {
