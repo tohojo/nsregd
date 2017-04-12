@@ -317,10 +317,12 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			if zone.cache.Add(rr) {
-				log.Printf("Got new A record for address %s", a.A)
+				log.Printf("Got new A record for address %s with TTL %d",
+					a.A, a.Hdr.Ttl)
 				records = append(records, a)
 			} else {
-				log.Printf("Refreshed A record for address %s", a.A)
+				log.Printf("Refreshed A record for address %s with TTL %d",
+					a.A, a.Hdr.Ttl)
 			}
 			m.Answer = append(m.Answer, a)
 			continue
@@ -332,10 +334,12 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				continue
 			}
 			if zone.cache.Add(rr) {
-				log.Printf("Got new AAAA record for address %s", aaaa.AAAA)
+				log.Printf("Got new AAAA record for address %s with TTL %d",
+					aaaa.AAAA, aaaa.Hdr.Ttl)
 				records = append(records, aaaa)
 			} else {
-				log.Printf("Refreshed AAAA record for address %s", aaaa.AAAA)
+				log.Printf("Refreshed AAAA record for address %s with TTL %d",
+					aaaa.AAAA, aaaa.Hdr.Ttl)
 			}
 			m.Answer = append(m.Answer, aaaa)
 			continue
