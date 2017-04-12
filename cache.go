@@ -94,6 +94,44 @@ func (c *Cache) Init() {
 	go c.run()
 }
 
+/* return true if we added a new entry */
+func (c *Cache) addRR(rr dns.RR) bool {
+	name := rr.Header().Name
+	ttl := c.clampTTL(rr)
+	if nc, ok := c.entries[name]; ok {
+		for _, e := range nc {
+			if same(e.rr, rr) {
+				if ttl == 0 {
+					nc.Remove(e)
+					c.expiryList.Remove(e)
+				} else {
+					e.rr.Header().Ttl = ttl
+					e.expiry = after(ttl)
+					sort.Sort(c.expiryList)
+				}
+				return false
+			}
+		}
+		if ttl > 0 {
+			/* cache entry exists for name, but not for this RR */
+			ce := &CacheEntry{rr: rr,
+				expiry: after(ttl)}
+			c.entries[name] = append(c.entries[name], ce)
+			c.expiryList = append(c.expiryList, ce)
+			return true
+		}
+	} else if ttl > 0 {
+		/* no prior cache entires for this name */
+		nc = make(CacheSlice, 1, 5)
+		nc[0] = &CacheEntry{rr: rr,
+			expiry: after(ttl)}
+		c.expiryList = append(c.expiryList, nc[0])
+		sort.Sort(c.expiryList)
+		return true
+	}
+	return false
+}
+
 func (c *Cache) run() {
 
 	go func() {
@@ -106,32 +144,7 @@ func (c *Cache) run() {
 	for req := range c.queue {
 		switch req.reqType {
 		case addRR:
-			found := false
-			name := req.rr.Header().Name
-			if nc, ok := c.entries[name]; ok {
-				for _, e := range nc {
-					if same(e.rr, req.rr) {
-						found = true
-						ttl := c.clampTTL(req.rr)
-						e.rr.Header().Ttl = ttl
-						e.expiry = after(ttl)
-						break
-					}
-				}
-				if !found {
-					ce := &CacheEntry{rr: req.rr,
-						expiry: after(c.clampTTL(req.rr))}
-					c.entries[name] = append(c.entries[name], ce)
-					c.expiryList = append(c.expiryList, ce)
-				}
-			} else {
-				nc = make(CacheSlice, 1, 5)
-				nc[0] = &CacheEntry{rr: req.rr,
-					expiry: after(c.clampTTL(req.rr))}
-				c.expiryList = append(c.expiryList, nc[0])
-			}
-			sort.Sort(c.expiryList)
-			req.reply <- !found
+			req.reply <- c.addRR(req.rr)
 		case expireRRs:
 			for now := time.Now(); len(c.expiryList) > 0 && c.expiryList[0].expiry.Before(now); {
 				e := c.expiryList[0]
