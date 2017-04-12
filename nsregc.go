@@ -8,16 +8,19 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"encoding/json"
 	"io/ioutil"
 
 	"github.com/miekg/dns"
+	"github.com/vishvananda/netlink"
 )
 
 const (
-	srvname = "_nsreg._tcp"
+	srvname         = "_nsreg._tcp"
+	skip_addr_flags = syscall.IFA_F_TEMPORARY | syscall.IFA_F_DEPRECATED
 )
 
 var (
@@ -98,6 +101,45 @@ func excludeIP(ip net.IP) bool {
 	return false
 }
 
+func getAddrs(ifname string) ([]net.IP, error) {
+	link, err := netlink.LinkByName(ifname)
+	if err != nil {
+		/* netlink failed - fall back to net library */
+		iface, err := net.InterfaceByName(ifname)
+		if err != nil {
+			log.Printf("Couldn't find interface %s: %s\n", link, err)
+			return nil, err
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return nil, err
+		}
+
+		res := make([]net.IP, 0, len(addrs))
+		for _, addr := range addrs {
+			switch v := addr.(type) {
+			case *net.IPNet:
+				res = append(res, v.IP)
+			case *net.IPAddr:
+				res = append(res, v.IP)
+			}
+		}
+		return res, nil
+	}
+
+	addrs, err := netlink.AddrList(link, 0)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]net.IP, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr.Flags&skip_addr_flags == 0 {
+			res = append(res, addr.IPNet.IP)
+		}
+	}
+	return res, nil
+}
+
 func registerZone(zone string, server string) {
 	c := new(dns.Client)
 	c.Net = "tcp"
@@ -108,26 +150,14 @@ func registerZone(zone string, server string) {
 	name := config.Name + "." + dns.Fqdn(zone)
 
 	for _, ifname := range config.Interfaces {
-		iface, err := net.InterfaceByName(ifname)
-		if err != nil {
-			log.Printf("Unable to find interface %s", ifname)
-			continue
-		}
-		addrs, err := iface.Addrs()
+		addrs, err := getAddrs(ifname)
 		if err != nil {
 			log.Printf("Unable to get addresses for interface %s", ifname)
 			continue
 		}
 
-		for _, addr := range addrs {
+		for _, ip := range addrs {
 
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
 			if excludeIP(ip) {
 				continue
 			}
