@@ -64,7 +64,9 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 
 	for _, orig := range records {
 		rr := dns.Copy(orig)
-		rr.Header().Ttl = nsup.Ttl
+		if rr.Header().Ttl > nsup.Ttl {
+			rr.Header().Ttl = nsup.Ttl
+		}
 		upd.Ns = append(upd.Ns, rr)
 	}
 
