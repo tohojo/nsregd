@@ -13,6 +13,7 @@ import (
 
 	"encoding/json"
 	"io/ioutil"
+	"os/signal"
 
 	"github.com/miekg/dns"
 	"github.com/vishvananda/netlink"
@@ -28,6 +29,7 @@ var (
 	conffile = flag.String("conffile", "nsregc.conf", "Config file")
 	port     = flag.Int("port", 53, "port number to use")
 	tcp      = flag.Bool("tcp", false, "Use TCP for initial SRV query")
+	keep     = flag.Bool("keep", false, "do not flush entries from upstreams on shutdown")
 	config   Config
 
 	keyrr   *dns.KEY
@@ -42,6 +44,12 @@ type Config struct {
 	ExcludeNets    []string
 	MaxTTL         uint32
 	excludedNets   []*net.IPNet
+}
+
+type Server struct {
+	Hostname string
+	Zone     string
+	cache    Cache
 }
 
 type Addr struct {
@@ -76,24 +84,28 @@ func sign(m *dns.Msg, name string) *dns.Msg {
 	return msg
 }
 
-func getServer(name string, server string, tcp bool) string {
+func getServer(zone string, server string, tcp bool) (*Server, bool) {
 	c := new(dns.Client)
 	if tcp {
 		c.Net = "tcp"
 	}
 	m := new(dns.Msg)
-	m.SetQuestion(srvname+"."+name, dns.TypeSRV)
+	m.SetQuestion(srvname+"."+zone, dns.TypeSRV)
 	m.SetEdns0(4096, true)
 	r, _, err := c.Exchange(m, server)
 	if err != nil {
-		return ""
+		return nil, false
 	}
 	for _, k := range r.Answer {
 		if srv, ok := k.(*dns.SRV); ok {
-			return srv.Target + ":" + strconv.Itoa(int(srv.Port))
+			serv := &Server{Zone: dns.Fqdn(zone),
+				Hostname: srv.Target + ":" + strconv.Itoa(int(srv.Port))}
+			serv.cache.ExpireCallback = serv.Refresh
+			serv.cache.Init()
+			return serv, true
 		}
 	}
-	return ""
+	return nil, false
 }
 
 func excludeIP(ip net.IP) bool {
@@ -154,14 +166,14 @@ func getTTL(ttl uint32) uint32 {
 	return ttl
 }
 
-func registerZone(zone string, server string) {
+func (s *Server) run() {
 	c := new(dns.Client)
 	c.Net = "tcp"
 
 	m := new(dns.Msg)
-	m.SetUpdate(zone)
+	m.SetUpdate(s.Zone)
 
-	name := config.Name + "." + dns.Fqdn(zone)
+	name := config.Name + "." + s.Zone
 
 	for _, ifname := range config.Interfaces {
 		addrs, err := getAddrs(ifname)
@@ -191,7 +203,7 @@ func registerZone(zone string, server string) {
 
 	log.Printf("Attempting to register %d addresses", len(m.Ns))
 
-	r, _, err := c.Exchange(sign(m, name), server)
+	r, _, err := c.Exchange(sign(m, name), s.Hostname)
 
 	if *printf {
 		fmt.Println(r)
@@ -201,9 +213,16 @@ func registerZone(zone string, server string) {
 	} else if r.Rcode != dns.RcodeSuccess {
 		log.Printf("Registration failed with code: %s", dns.RcodeToString[r.Rcode])
 	} else {
-		log.Printf("Successfully registered in zone %s", zone)
+		log.Printf("Successfully registered in zone %s", s.Zone)
 	}
 
+}
+
+func (s *Server) Refresh(rr dns.RR) bool {
+	return false
+}
+
+func (s *Server) Remove() {
 }
 
 func main() {
@@ -290,13 +309,20 @@ func main() {
 	log.Printf("Using nameserver %s", nameserver)
 
 	for _, zone := range zones {
-		server := getServer(zone, nameserver, *tcp)
-		if len(server) == 0 {
+		server, ok := getServer(zone, nameserver, *tcp)
+		if !ok {
 			log.Printf("No nsregd server found for zone %s", zone)
 		} else {
-			log.Printf("Found nsregd server %s for zone %s", server, zone)
-			registerZone(zone, server)
+			log.Printf("Found nsregd server %s for zone %s", server.Hostname, zone)
+			if !*keep {
+				defer server.Remove()
+			}
+			go server.run()
 		}
 	}
 
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	s := <-sig
+	fmt.Printf("Signal (%s) received, stopping\n", s)
 }
