@@ -361,13 +361,12 @@ func main() {
 			upstream.parseArgs()
 		}
 
-		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout)
+		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout, zone.removeName)
 		if err != nil {
 			return
 		}
 		log.Printf("Configuring zone %s with db file %s", zone.Name, zone.KeyDbFile)
 		zone.keydb = kdb
-		kdb.expireCallback = zone.removeName
 		defer kdb.Stop()
 
 		zone.cache = &Cache{expireCallback: zone.removeRR}

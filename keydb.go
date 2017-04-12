@@ -90,12 +90,13 @@ func (db *KeyDb) run() {
 	}
 }
 
-func NewKeyDb(filename string, keytimeout uint) (*KeyDb, error) {
+func NewKeyDb(filename string, keytimeout uint, callback func(name string) bool) (*KeyDb, error) {
 	db := KeyDb{
-		keys:    make(map[string]Key),
-		queue:   make(chan keyRequest),
-		timeout: time.Duration(keytimeout) * time.Second,
-		keyfile: filename}
+		keys:           make(map[string]Key),
+		queue:          make(chan keyRequest),
+		timeout:        time.Duration(keytimeout) * time.Second,
+		keyfile:        filename,
+		expireCallback: callback}
 
 	defer func() {
 		go db.run()
