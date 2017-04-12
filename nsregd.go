@@ -69,6 +69,8 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 
 	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
 
+	log.Printf("Sending update to %s", nsup.Hostname)
+
 	r, _, err := c.Exchange(upd, hostname)
 
 	if err != nil {
@@ -196,6 +198,11 @@ func (zone *Zone) isIPAllowed(ip net.IP) bool {
 
 func (zone *Zone) sendUpdates(records []dns.RR) bool {
 	success := true
+
+	if len(zone.Upstreams) == 0 {
+		log.Printf("No upstreams configured for zone %s", zone.Name)
+		return false
+	}
 	for _, u := range zone.Upstreams {
 		success = success && u.sendUpdate(records)
 	}
@@ -290,10 +297,13 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				log.Printf("Got A record %s outside allowed ranges. Skipping.", a.A)
 				continue
 			}
-			log.Printf("Got A record for address %s", a.A)
 			if zone.cache.Add(rr) {
+				log.Printf("Got new A record for address %s", a.A)
 				records = append(records, a)
+			} else {
+				log.Printf("Refreshed A record for address %s", a.A)
 			}
+			m.Answer = append(m.Answer, a)
 			continue
 		}
 
@@ -302,10 +312,13 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				log.Printf("Got AAAA record %s outside allowed ranges. Skipping.", aaaa.AAAA)
 				continue
 			}
-			log.Printf("Got AAAA record for address %s", aaaa.AAAA)
 			if zone.cache.Add(rr) {
+				log.Printf("Got new AAAA record for address %s", aaaa.AAAA)
 				records = append(records, aaaa)
+			} else {
+				log.Printf("Refreshed AAAA record for address %s", aaaa.AAAA)
 			}
+			m.Answer = append(m.Answer, aaaa)
 			continue
 		}
 
