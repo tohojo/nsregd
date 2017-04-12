@@ -393,9 +393,13 @@ func main() {
 	}
 	fi.Close()
 
-	var ok bool
-	keyrr, ok = rr.(*dns.KEY)
-	if !ok {
+	switch rr.Header().Rrtype {
+	case dns.TypeDNSKEY:
+		keyrr = &dns.KEY{*rr.(*dns.DNSKEY)}
+		keyrr.Hdr.Rrtype = dns.TypeKEY
+	case dns.TypeKEY:
+		keyrr = rr.(*dns.KEY)
+	default:
 		log.Panic("No KEY in keyfile")
 	}
 	fi, err = os.Open(config.PrivateKeyFile)
