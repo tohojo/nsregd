@@ -354,7 +354,9 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	}
 
-	if !zone.sendUpdates(records) {
+	if len(records) == 0 {
+		log.Print("No new (non-cached) records, not sending update")
+	} else if !zone.sendUpdates(records) {
 		m.Rcode = dns.RcodeServerFailure
 	}
 
