@@ -341,6 +341,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				}
 				log.Printf("Got removal for %s record for address %s", t, ip)
 				zone.cache.Remove(rr)
+				records = append(records, rr)
 			} else if zone.cache.Add(rr) {
 				log.Printf("Got new %s record for address %s with TTL %d",
 					t, ip, rr.Header().Ttl)
