@@ -32,7 +32,7 @@ type Config struct {
 
 type Zone struct {
 	Name        string
-	Upstreams   []Upstream
+	Upstreams   []NSUpstream
 	AllowedNets []string
 	AllowAnyNet bool
 	allowedNets []*net.IPNet
