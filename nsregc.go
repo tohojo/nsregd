@@ -40,7 +40,13 @@ type Config struct {
 	PrivateKeyFile string
 	Interfaces     []string
 	ExcludeNets    []string
+	MaxTTL         uint32
 	excludedNets   []*net.IPNet
+}
+
+type Addr struct {
+	IP  net.IP
+	Ttl uint32
 }
 
 func sign(m *dns.Msg, name string) *dns.Msg {
@@ -101,7 +107,7 @@ func excludeIP(ip net.IP) bool {
 	return false
 }
 
-func getAddrs(ifname string) ([]net.IP, error) {
+func getAddrs(ifname string) ([]Addr, error) {
 	link, err := netlink.LinkByName(ifname)
 	if err != nil {
 		/* netlink failed - fall back to net library */
@@ -115,13 +121,13 @@ func getAddrs(ifname string) ([]net.IP, error) {
 			return nil, err
 		}
 
-		res := make([]net.IP, 0, len(addrs))
+		res := make([]Addr, 0, len(addrs))
 		for _, addr := range addrs {
 			switch v := addr.(type) {
 			case *net.IPNet:
-				res = append(res, v.IP)
+				res = append(res, Addr{IP: v.IP})
 			case *net.IPAddr:
-				res = append(res, v.IP)
+				res = append(res, Addr{IP: v.IP})
 			}
 		}
 		return res, nil
@@ -131,13 +137,21 @@ func getAddrs(ifname string) ([]net.IP, error) {
 	if err != nil {
 		return nil, err
 	}
-	res := make([]net.IP, 0, len(addrs))
+	res := make([]Addr, 0, len(addrs))
 	for _, addr := range addrs {
-		if addr.Flags&skip_addr_flags == 0 {
-			res = append(res, addr.IPNet.IP)
+		if addr.Flags&skip_addr_flags == 0 && !excludeIP(addr.IPNet.IP) {
+			res = append(res, Addr{IP: addr.IPNet.IP,
+				Ttl: uint32(addr.ValidLft)})
 		}
 	}
 	return res, nil
+}
+
+func getTTL(ttl uint32) uint32 {
+	if ttl == 0 || ttl > config.MaxTTL {
+		return config.MaxTTL
+	}
+	return ttl
 }
 
 func registerZone(zone string, server string) {
@@ -156,22 +170,19 @@ func registerZone(zone string, server string) {
 			continue
 		}
 
-		for _, ip := range addrs {
+		for _, a := range addrs {
 
-			if excludeIP(ip) {
-				continue
-			}
-			if v4 := ip.To4(); v4 != nil {
+			if v4 := a.IP.To4(); v4 != nil {
 				rr := &dns.A{
 					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA,
-						Class: dns.ClassINET, Ttl: 300},
-					A: ip}
+						Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
+					A: a.IP}
 				m.Insert([]dns.RR{rr})
 			} else {
 				rr := &dns.AAAA{
 					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA,
-						Class: dns.ClassINET, Ttl: 300},
-					AAAA: ip}
+						Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
+					AAAA: a.IP}
 				m.Insert([]dns.RR{rr})
 			}
 		}
