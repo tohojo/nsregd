@@ -55,21 +55,32 @@ type NSUpstream struct {
 	Zone       string
 	TSigName   string
 	TSigSecret string
+	Ttl        uint32
 }
 
 func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 	upd := new(dns.Msg)
 	upd.SetUpdate(nsup.Zone)
 
+	for _, orig := range records {
+		rr := dns.Copy(orig)
+		rr.Header().Ttl = nsup.Ttl
+		upd.Ns = append(upd.Ns, rr)
+	}
+
+	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
+
 	c := new(dns.Client)
 	c.TsigSecret = make(map[string]string)
 	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
 
-	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
-
 	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
 
-	log.Printf("Sending update to %s", nsup.Hostname)
+	log.Printf("Sending nsupdate to %s with %d names", hostname, len(upd.Ns))
+
+	if *printf {
+		fmt.Printf("Update message: %s", upd)
+	}
 
 	r, _, err := c.Exchange(upd, hostname)
 
@@ -80,6 +91,8 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 		log.Printf("Upstream DNS update failed with error code %s",
 			dns.RcodeToString[r.Rcode])
 		return false
+	} else {
+		log.Printf("Upstream nsupdate of %s successful", hostname)
 	}
 
 	return true
