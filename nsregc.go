@@ -270,7 +270,7 @@ func (s *Server) send(m *dns.Msg) bool {
 	c := new(dns.Client)
 	c.Net = "tcp"
 
-	log.Printf("Attempting to register %d addresses for name %s",
+	log.Printf("Sending update with %d addresses for name %s",
 		len(m.Ns), s.Name)
 
 	r, _, err := c.Exchange(sign(m, s.Name), s.Hostname)
@@ -285,12 +285,14 @@ func (s *Server) send(m *dns.Msg) bool {
 		log.Printf("Registration failed with code: %s", dns.RcodeToString[r.Rcode])
 		return false
 	} else {
-		log.Printf("Successfully registered %d addresses for name %s",
-			len(r.Answer), s.Name)
-
 		if s.closing {
+			log.Printf("Successfully removed %d addresses for name %s",
+				len(r.Answer), s.Name)
 			return true
 		}
+
+		log.Printf("Successfully registered %d addresses for name %s",
+			len(r.Answer), s.Name)
 
 		for _, rr := range r.Answer {
 			switch rr.Header().Rrtype {
