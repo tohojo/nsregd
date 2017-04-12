@@ -206,7 +206,7 @@ func (zone *Zone) removeName(name string) bool {
 	success := true
 
 	records := make([]dns.RR, 1)
-	records[1] = &dns.ANY{Hdr: dns.RR_Header{Name: name, Ttl: 0, Rrtype: dns.TypeANY, Class: dns.ClassANY}}
+	records[0] = &dns.ANY{Hdr: dns.RR_Header{Name: name, Ttl: 0, Rrtype: dns.TypeANY, Class: dns.ClassANY}}
 
 	for _, u := range zone.Upstreams {
 		success = success && u.sendUpdate(records)
@@ -221,7 +221,7 @@ func (zone *Zone) removeRR(rr dns.RR) bool {
 	records := make([]dns.RR, 1)
 	rr.Header().Class = dns.ClassNONE
 	rr.Header().Ttl = 0
-	records[1] = rr
+	records[0] = rr
 
 	for _, u := range zone.Upstreams {
 		success = success && u.sendUpdate(records)
