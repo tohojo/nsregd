@@ -279,7 +279,7 @@ func (s *Server) send(m *dns.Msg) bool {
 		fmt.Println(r)
 	}
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Unable to send update packet: %s", err)
 		return false
 	} else if r.Rcode != dns.RcodeSuccess {
 		log.Printf("Registration failed with code: %s", dns.RcodeToString[r.Rcode])
