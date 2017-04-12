@@ -184,7 +184,7 @@ func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bo
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
 			log.Printf("Verified sig with new key for %s", name)
-			key = Key{
+			key = &Key{
 				Name:      name,
 				Flags:     keyrr.Flags,
 				Protocol:  keyrr.Protocol,
