@@ -52,6 +52,7 @@ type Server struct {
 	Zone     string
 	Name     string
 	cache    Cache
+	nldone   chan struct{}
 }
 
 type Addr struct {
@@ -116,7 +117,8 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 		if srv, ok := k.(*dns.SRV); ok {
 			serv := &Server{Zone: dns.Fqdn(zone),
 				Name:     config.Name + "." + dns.Fqdn(zone),
-				Hostname: srv.Target + ":" + strconv.Itoa(int(srv.Port))}
+				Hostname: srv.Target + ":" + strconv.Itoa(int(srv.Port)),
+				nldone:   make(chan struct{})}
 			serv.cache.ExpireCallback = serv.Refresh
 			serv.cache.MaxTTL = config.MaxTTL
 			serv.cache.Init()
@@ -205,6 +207,39 @@ func (s *Server) run() {
 
 	s.send(m)
 
+	go func() {
+		nlchan := make(chan netlink.AddrUpdate)
+
+		err := netlink.AddrSubscribe(nlchan, s.nldone)
+		if err != nil {
+			log.Printf("Unable to subscribe to netlink address updates: %s", err)
+		}
+
+		for upd := range nlchan {
+			lnk, err := netlink.LinkByIndex(upd.LinkIndex)
+			if err != nil {
+				continue
+			}
+			var ifname string
+			for _, name := range config.Interfaces {
+				if name == lnk.Attrs().Name {
+					ifname = name
+					break
+				}
+			}
+			if len(ifname) == 0 {
+				continue
+			}
+
+			if upd.NewAddr {
+				log.Printf("New address %s on interface %s", upd.LinkAddress.IP, ifname)
+			} else {
+				log.Printf("Lost address %s on interface %s", upd.LinkAddress.IP, ifname)
+			}
+
+		}
+	}()
+
 }
 
 func (s *Server) send(m *dns.Msg) bool {
@@ -281,7 +316,8 @@ func (s *Server) Refresh(rr []dns.RR) bool {
 	return s.send(m)
 }
 
-func (s *Server) Remove() {
+func (s *Server) Stop() {
+	close(s.nldone)
 }
 
 func main() {
@@ -374,7 +410,7 @@ func main() {
 		} else {
 			log.Printf("Found nsregd server %s for zone %s", server.Hostname, zone)
 			if !*keep {
-				defer server.Remove()
+				defer server.Stop()
 			}
 			go server.run()
 		}
