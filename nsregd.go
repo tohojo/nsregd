@@ -38,6 +38,7 @@ type Zone struct {
 	allowedNets []*net.IPNet
 	KeyDbFile   string
 	KeyTimeout  uint
+	MaxTTL      uint32
 	keydb       *KeyDb
 	cache       *Cache
 }
@@ -369,7 +370,8 @@ func main() {
 		zone.keydb = kdb
 		defer kdb.Stop()
 
-		zone.cache = &Cache{expireCallback: zone.removeRR}
+		zone.cache = &Cache{ExpireCallback: zone.removeRR,
+			MaxTTL: zone.MaxTTL}
 		zone.cache.Init()
 		defer zone.cache.Flush(!*keep)
 

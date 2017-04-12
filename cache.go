@@ -19,7 +19,8 @@ type Cache struct {
 	entries        map[string]CacheSlice /* entries mapped by name */
 	expiryList     CacheSlice            /* entries sorted by expiry time */
 	queue          chan CacheRequest
-	expireCallback func(rr dns.RR) bool
+	ExpireCallback func(rr dns.RR) bool
+	MaxTTL         uint32
 }
 
 type CacheSlice []*CacheEntry
@@ -63,14 +64,6 @@ func (s CacheSlice) Remove(e *CacheEntry) CacheSlice {
 	return s
 }
 
-func (c *Cache) Init() {
-	c.entries = make(map[string]CacheSlice)
-	c.expiryList = make(CacheSlice, 0, 10)
-	c.queue = make(chan CacheRequest)
-
-	go c.run()
-}
-
 func same(a, b dns.RR) bool {
 	if a.Header().Rrtype != b.Header().Rrtype {
 		return false
@@ -93,6 +86,14 @@ func after(seconds uint32) time.Time {
 	return time.Now().Add(time.Duration(seconds) * time.Second)
 }
 
+func (c *Cache) Init() {
+	c.entries = make(map[string]CacheSlice)
+	c.expiryList = make(CacheSlice, 0, 10)
+	c.queue = make(chan CacheRequest)
+
+	go c.run()
+}
+
 func (c *Cache) run() {
 
 	go func() {
@@ -111,20 +112,22 @@ func (c *Cache) run() {
 				for _, e := range nc {
 					if same(e.rr, req.rr) {
 						found = true
-						e.expiry = after(req.rr.Header().Ttl)
+						ttl := c.clampTTL(req.rr)
+						e.rr.Header().Ttl = ttl
+						e.expiry = after(ttl)
 						break
 					}
 				}
 				if !found {
 					ce := &CacheEntry{rr: req.rr,
-						expiry: after(req.rr.Header().Ttl)}
+						expiry: after(c.clampTTL(req.rr))}
 					c.entries[name] = append(c.entries[name], ce)
 					c.expiryList = append(c.expiryList, ce)
 				}
 			} else {
 				nc = make(CacheSlice, 1, 5)
 				nc[0] = &CacheEntry{rr: req.rr,
-					expiry: after(req.rr.Header().Ttl)}
+					expiry: after(c.clampTTL(req.rr))}
 				c.expiryList = append(c.expiryList, nc[0])
 			}
 			sort.Sort(c.expiryList)
@@ -135,11 +138,18 @@ func (c *Cache) run() {
 				c.expiryList = c.expiryList[1:]
 
 				name := e.rr.Header().Name
-				c.expireCallback(e.rr)
+				c.ExpireCallback(e.rr)
 				c.entries[name] = c.entries[name].Remove(e)
 			}
 		}
 	}
+}
+
+func (c *Cache) clampTTL(rr dns.RR) uint32 {
+	if rr.Header().Ttl > c.MaxTTL {
+		rr.Header().Ttl = c.MaxTTL
+	}
+	return rr.Header().Ttl
 }
 
 /**
@@ -160,7 +170,7 @@ func (c *Cache) Add(rr dns.RR) bool {
 func (c *Cache) Flush(runCallback bool) {
 	if runCallback {
 		for _, e := range c.expiryList {
-			c.expireCallback(e.rr)
+			c.ExpireCallback(e.rr)
 		}
 	}
 }
