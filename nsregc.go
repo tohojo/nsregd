@@ -208,7 +208,8 @@ func (s *Server) send(m *dns.Msg) bool {
 	c := new(dns.Client)
 	c.Net = "tcp"
 
-	log.Printf("Attempting to register %d addresses", len(m.Ns))
+	log.Printf("Attempting to register %d addresses for name %s",
+		len(m.Ns), s.Name)
 
 	r, _, err := c.Exchange(sign(m, s.Name), s.Hostname)
 
@@ -222,7 +223,8 @@ func (s *Server) send(m *dns.Msg) bool {
 		log.Printf("Registration failed with code: %s", dns.RcodeToString[r.Rcode])
 		return false
 	} else {
-		log.Printf("Successfully registered %d names in zone %s", len(r.Answer), s.Zone)
+		log.Printf("Successfully registered %d addresses for name %s",
+			len(r.Answer), s.Name)
 
 		for _, rr := range r.Answer {
 			switch rr.Header().Rrtype {
@@ -244,6 +246,9 @@ func (s *Server) Refresh(rr []dns.RR) bool {
 	m := new(dns.Msg)
 	m.SetUpdate(s.Zone)
 
+	// When entries expire we check if the address still exists on one of
+	// the configured interfaces, and use the current expiry time for the
+	// new TTL
 	for _, ifname := range config.Interfaces {
 		addrs, err := getAddrs(ifname)
 		if err != nil {
