@@ -14,8 +14,6 @@ const (
 	getKey
 	refreshKey
 	expireKeys
-
-	expiryInterval = 5 * time.Second
 )
 
 type keyReqType int
@@ -48,7 +46,7 @@ type keyRequest struct {
 func (db *KeyDb) run() {
 	go func() {
 		for {
-			time.Sleep(expiryInterval)
+			time.Sleep(time.Second)
 			db.queue <- keyRequest{reqType: expireKeys}
 		}
 	}()

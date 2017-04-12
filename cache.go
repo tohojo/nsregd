@@ -161,7 +161,7 @@ func (c *Cache) run() {
 
 	go func() {
 		for {
-			time.Sleep(expiryInterval)
+			time.Sleep(time.Second)
 			c.queue <- CacheRequest{reqType: expireRRs}
 		}
 	}()
