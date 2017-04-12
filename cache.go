@@ -10,6 +10,7 @@ import (
 
 const (
 	addRR cacheReqType = iota
+	checkRR
 	removeRR
 	removeName
 	expireRRs
@@ -132,6 +133,18 @@ func (c *Cache) addRR(rr dns.RR) bool {
 	}
 }
 
+func (c *Cache) checkRR(rr dns.RR) bool {
+	name := rr.Header().Name
+	if nc, ok := c.entries[name]; ok {
+		for _, e := range nc {
+			if same(e.rr, rr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Cache) removeRR(rr dns.RR) bool {
 	name := rr.Header().Name
 	if nc, ok := c.entries[name]; ok {
@@ -170,6 +183,8 @@ func (c *Cache) run() {
 		switch req.reqType {
 		case addRR:
 			req.reply <- c.addRR(req.rr)
+		case checkRR:
+			req.reply <- c.checkRR(req.rr)
 		case removeRR:
 			req.reply <- c.removeRR(req.rr)
 		case removeName:
@@ -206,6 +221,16 @@ func (c *Cache) clampTTL(rr dns.RR) uint32 {
 func (c *Cache) Add(rr dns.RR) bool {
 	reply := make(chan bool)
 	req := CacheRequest{reqType: addRR,
+		rr:    rr,
+		reply: reply,
+	}
+	c.queue <- req
+	return <-reply
+}
+
+func (c *Cache) Check(rr dns.RR) bool {
+	reply := make(chan bool)
+	req := CacheRequest{reqType: checkRR,
 		rr:    rr,
 		reply: reply,
 	}
