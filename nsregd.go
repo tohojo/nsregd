@@ -55,7 +55,7 @@ type NSUpstream struct {
 	Zone       string
 	TSigName   string
 	TSigSecret string
-	Ttl        uint32
+	MaxTTL     uint32
 }
 
 func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
@@ -64,8 +64,8 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 
 	for _, orig := range records {
 		rr := dns.Copy(orig)
-		if rr.Header().Ttl > nsup.Ttl {
-			rr.Header().Ttl = nsup.Ttl
+		if rr.Header().Ttl > nsup.MaxTTL {
+			rr.Header().Ttl = nsup.MaxTTL
 		}
 		upd.Ns = append(upd.Ns, rr)
 	}
