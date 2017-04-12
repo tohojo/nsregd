@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto"
 	"flag"
 	"fmt"
@@ -49,6 +50,7 @@ type Config struct {
 type Server struct {
 	Hostname string
 	Zone     string
+	Name     string
 	cache    Cache
 }
 
@@ -99,8 +101,10 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 	for _, k := range r.Answer {
 		if srv, ok := k.(*dns.SRV); ok {
 			serv := &Server{Zone: dns.Fqdn(zone),
+				Name:     config.Name + "." + dns.Fqdn(zone),
 				Hostname: srv.Target + ":" + strconv.Itoa(int(srv.Port))}
 			serv.cache.ExpireCallback = serv.Refresh
+			serv.cache.MaxTTL = config.MaxTTL
 			serv.cache.Init()
 			return serv, true
 		}
@@ -167,13 +171,8 @@ func getTTL(ttl uint32) uint32 {
 }
 
 func (s *Server) run() {
-	c := new(dns.Client)
-	c.Net = "tcp"
-
 	m := new(dns.Msg)
 	m.SetUpdate(s.Zone)
-
-	name := config.Name + "." + s.Zone
 
 	for _, ifname := range config.Interfaces {
 		addrs, err := getAddrs(ifname)
@@ -186,13 +185,13 @@ func (s *Server) run() {
 
 			if v4 := a.IP.To4(); v4 != nil {
 				rr := &dns.A{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA,
+					Hdr: dns.RR_Header{Name: s.Name, Rrtype: dns.TypeA,
 						Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
 					A: a.IP}
 				m.Insert([]dns.RR{rr})
 			} else {
 				rr := &dns.AAAA{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA,
+					Hdr: dns.RR_Header{Name: s.Name, Rrtype: dns.TypeAAAA,
 						Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
 					AAAA: a.IP}
 				m.Insert([]dns.RR{rr})
@@ -201,25 +200,75 @@ func (s *Server) run() {
 
 	}
 
+	s.send(m)
+
+}
+
+func (s *Server) send(m *dns.Msg) bool {
+	c := new(dns.Client)
+	c.Net = "tcp"
+
 	log.Printf("Attempting to register %d addresses", len(m.Ns))
 
-	r, _, err := c.Exchange(sign(m, name), s.Hostname)
+	r, _, err := c.Exchange(sign(m, s.Name), s.Hostname)
 
 	if *printf {
 		fmt.Println(r)
 	}
 	if err != nil {
 		log.Fatal(err)
+		return false
 	} else if r.Rcode != dns.RcodeSuccess {
 		log.Printf("Registration failed with code: %s", dns.RcodeToString[r.Rcode])
+		return false
 	} else {
-		log.Printf("Successfully registered in zone %s", s.Zone)
+		log.Printf("Successfully registered %d names in zone %s", len(r.Answer), s.Zone)
+
+		for _, rr := range r.Answer {
+			switch rr.Header().Rrtype {
+			case dns.TypeA, dns.TypeAAAA:
+				// refresh at half the expire time to be safe
+				rr.Header().Ttl /= 2
+				if rr.Header().Ttl > 0 {
+					s.cache.Add(rr)
+				}
+			}
+		}
+
+		return true
 	}
 
 }
 
 func (s *Server) Refresh(rr dns.RR) bool {
-	return false
+	log.Printf("Refreshing %s", rr)
+	m := new(dns.Msg)
+	m.SetUpdate(s.Zone)
+
+	for _, ifname := range config.Interfaces {
+		addrs, err := getAddrs(ifname)
+		if err != nil {
+			log.Printf("Unable to get addresses for interface %s", ifname)
+			continue
+		}
+
+		for _, a := range addrs {
+
+			var ip net.IP
+			switch rr.Header().Rrtype {
+			case dns.TypeA:
+				ip = rr.(*dns.A).A
+			case dns.TypeAAAA:
+				ip = rr.(*dns.AAAA).AAAA
+			}
+			if bytes.Compare(ip, a.IP) == 0 {
+				rr.Header().Ttl = getTTL(a.Ttl)
+				m.Insert([]dns.RR{rr})
+			}
+		}
+	}
+
+	return s.send(m)
 }
 
 func (s *Server) Remove() {
