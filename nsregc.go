@@ -59,6 +59,20 @@ type Addr struct {
 	Ttl uint32
 }
 
+func (a *Addr) toRR(name string) dns.RR {
+	if v4 := a.IP.To4(); v4 != nil {
+		return &dns.A{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA,
+				Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
+			A: a.IP}
+	} else {
+		return &dns.AAAA{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA,
+				Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
+			AAAA: a.IP}
+	}
+}
+
 func sign(m *dns.Msg, name string) *dns.Msg {
 	keyrr.Hdr.Name = name
 
@@ -181,22 +195,11 @@ func (s *Server) run() {
 			continue
 		}
 
-		for _, a := range addrs {
-
-			if v4 := a.IP.To4(); v4 != nil {
-				rr := &dns.A{
-					Hdr: dns.RR_Header{Name: s.Name, Rrtype: dns.TypeA,
-						Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
-					A: a.IP}
-				m.Insert([]dns.RR{rr})
-			} else {
-				rr := &dns.AAAA{
-					Hdr: dns.RR_Header{Name: s.Name, Rrtype: dns.TypeAAAA,
-						Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
-					AAAA: a.IP}
-				m.Insert([]dns.RR{rr})
-			}
+		rr := make([]dns.RR, len(addrs))
+		for i, a := range addrs {
+			rr[i] = a.toRR(s.Name)
 		}
+		m.Insert(rr)
 
 	}
 
