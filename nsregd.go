@@ -325,13 +325,12 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := getIP(rr)
 			t := dns.TypeToString[rr.Header().Rrtype]
-			ttl := rr.Header().Ttl
 			if !zone.AllowAnyNet && !zone.isIPAllowed(ip) {
 				log.Printf("Got %s record for %s outside allowed ranges. Skipping.",
 					t, ip)
 				continue
 			}
-			if ttl == 0 {
+			if rr.Header().Ttl == 0 {
 				if rr.Header().Class != dns.ClassNONE {
 					m.Rcode = dns.RcodeFormatError
 					goto out
@@ -340,11 +339,11 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 				zone.cache.Remove(rr)
 			} else if zone.cache.Add(rr) {
 				log.Printf("Got new %s record for address %s with TTL %d",
-					t, ip, ttl)
+					t, ip, rr.Header().Ttl)
 				records = append(records, rr)
 			} else {
 				log.Printf("Refreshed %s record for address %s with TTL %d",
-					t, ip, ttl)
+					t, ip, rr.Header().Ttl)
 			}
 			m.Answer = append(m.Answer, rr)
 		default:
