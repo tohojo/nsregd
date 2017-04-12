@@ -10,6 +10,7 @@ import (
 
 const (
 	addRR cacheReqType = iota
+	removeRR
 	expireRRs
 )
 
@@ -98,29 +99,26 @@ func (c *Cache) Init() {
 func (c *Cache) addRR(rr dns.RR) bool {
 	name := rr.Header().Name
 	ttl := c.clampTTL(rr)
+	if ttl == 0 {
+		return false
+	}
 	if nc, ok := c.entries[name]; ok {
 		for _, e := range nc {
 			if same(e.rr, rr) {
-				if ttl == 0 {
-					nc.Remove(e)
-					c.expiryList.Remove(e)
-				} else {
-					e.rr.Header().Ttl = ttl
-					e.expiry = after(ttl)
-					sort.Sort(c.expiryList)
-				}
+				e.rr.Header().Ttl = ttl
+				e.expiry = after(ttl)
+				sort.Sort(c.expiryList)
 				return false
 			}
 		}
-		if ttl > 0 {
-			/* cache entry exists for name, but not for this RR */
-			ce := &CacheEntry{rr: rr,
-				expiry: after(ttl)}
-			c.entries[name] = append(c.entries[name], ce)
-			c.expiryList = append(c.expiryList, ce)
-			return true
-		}
-	} else if ttl > 0 {
+		/* cache entry exists for name, but not for this RR */
+		ce := &CacheEntry{rr: rr,
+			expiry: after(ttl)}
+		c.entries[name] = append(c.entries[name], ce)
+		c.expiryList = append(c.expiryList, ce)
+		sort.Sort(c.expiryList)
+		return true
+	} else {
 		/* no prior cache entires for this name */
 		nc = make(CacheSlice, 1, 5)
 		nc[0] = &CacheEntry{rr: rr,
@@ -128,6 +126,20 @@ func (c *Cache) addRR(rr dns.RR) bool {
 		c.expiryList = append(c.expiryList, nc[0])
 		sort.Sort(c.expiryList)
 		return true
+	}
+}
+
+func (c *Cache) removeRR(rr dns.RR) bool {
+	name := rr.Header().Name
+	if nc, ok := c.entries[name]; ok {
+		for _, e := range nc {
+			if same(e.rr, rr) {
+				nc.Remove(e)
+				c.expiryList.Remove(e)
+				sort.Sort(c.expiryList)
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -145,6 +157,8 @@ func (c *Cache) run() {
 		switch req.reqType {
 		case addRR:
 			req.reply <- c.addRR(req.rr)
+		case removeRR:
+			req.reply <- c.removeRR(req.rr)
 		case expireRRs:
 			for now := time.Now(); len(c.expiryList) > 0 && c.expiryList[0].expiry.Before(now); {
 				e := c.expiryList[0]
@@ -173,6 +187,16 @@ func (c *Cache) clampTTL(rr dns.RR) uint32 {
 func (c *Cache) Add(rr dns.RR) bool {
 	reply := make(chan bool)
 	req := CacheRequest{reqType: addRR,
+		rr:    rr,
+		reply: reply,
+	}
+	c.queue <- req
+	return <-reply
+}
+
+func (c *Cache) Remove(rr dns.RR) bool {
+	reply := make(chan bool)
+	req := CacheRequest{reqType: removeRR,
 		rr:    rr,
 		reply: reply,
 	}
