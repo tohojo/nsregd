@@ -240,8 +240,7 @@ func (s *Server) send(m *dns.Msg) bool {
 
 }
 
-func (s *Server) Refresh(rr dns.RR) bool {
-	log.Printf("Refreshing %s", rr)
+func (s *Server) Refresh(rr []dns.RR) bool {
 	m := new(dns.Msg)
 	m.SetUpdate(s.Zone)
 
@@ -254,16 +253,19 @@ func (s *Server) Refresh(rr dns.RR) bool {
 
 		for _, a := range addrs {
 
-			var ip net.IP
-			switch rr.Header().Rrtype {
-			case dns.TypeA:
-				ip = rr.(*dns.A).A
-			case dns.TypeAAAA:
-				ip = rr.(*dns.AAAA).AAAA
-			}
-			if bytes.Compare(ip, a.IP) == 0 {
-				rr.Header().Ttl = getTTL(a.Ttl)
-				m.Insert([]dns.RR{rr})
+			for _, r := range rr {
+				var ip net.IP
+				switch r.Header().Rrtype {
+				case dns.TypeA:
+					ip = r.(*dns.A).A
+				case dns.TypeAAAA:
+					ip = r.(*dns.AAAA).AAAA
+				}
+				if bytes.Compare(ip, a.IP) == 0 {
+					log.Printf("Refreshing record for IP %s", ip)
+					r.Header().Ttl = getTTL(a.Ttl)
+					m.Insert([]dns.RR{r})
+				}
 			}
 		}
 	}

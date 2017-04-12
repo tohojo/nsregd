@@ -241,15 +241,17 @@ func (zone *Zone) removeName(name string) bool {
 	return success
 }
 
-func (zone *Zone) removeRR(rr dns.RR) bool {
+func (zone *Zone) removeRRs(rr []dns.RR) bool {
 	success := true
 
-	log.Printf("Removing RR: %s", rr)
+	records := make([]dns.RR, 0, len(rr))
 
-	records := make([]dns.RR, 1)
-	rr.Header().Class = dns.ClassNONE
-	rr.Header().Ttl = 0
-	records[0] = rr
+	for _, r := range rr {
+		log.Printf("Removing RR: %s", r)
+		r.Header().Class = dns.ClassNONE
+		r.Header().Ttl = 0
+		records = append(records, r)
+	}
 
 	for _, u := range zone.Upstreams {
 		success = success && u.sendUpdate(records)
@@ -414,7 +416,7 @@ func main() {
 		zone.keydb = kdb
 		defer kdb.Stop()
 
-		zone.cache = &Cache{ExpireCallback: zone.removeRR,
+		zone.cache = &Cache{ExpireCallback: zone.removeRRs,
 			MaxTTL: zone.MaxTTL}
 		zone.cache.Init()
 		defer zone.cache.Flush(!*keep)

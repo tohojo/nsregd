@@ -21,7 +21,7 @@ type Cache struct {
 	entries        map[string]CacheSlice /* entries mapped by name */
 	expiryList     CacheSlice            /* entries sorted by expiry time */
 	queue          chan CacheRequest
-	ExpireCallback func(rr dns.RR) bool
+	ExpireCallback func(rr []dns.RR) bool
 	MaxTTL         uint32
 }
 
@@ -175,13 +175,17 @@ func (c *Cache) run() {
 		case removeName:
 			req.reply <- c.removeName(req.name)
 		case expireRRs:
+			rr := make([]dns.RR, 0)
 			for now := time.Now(); len(c.expiryList) > 0 && c.expiryList[0].expiry.Before(now); {
 				e := c.expiryList[0]
 				c.expiryList = c.expiryList[1:]
 
 				name := e.rr.Header().Name
 				c.entries[name] = c.entries[name].Remove(e)
-				go c.ExpireCallback(e.rr)
+				rr = append(rr, e.rr)
+			}
+			if len(rr) > 0 {
+				go c.ExpireCallback(rr)
 			}
 		}
 	}
@@ -230,9 +234,11 @@ func (c *Cache) RemoveName(name string) bool {
 }
 
 func (c *Cache) Flush(runCallback bool) {
-	if runCallback {
-		for _, e := range c.expiryList {
-			c.ExpireCallback(e.rr)
+	if runCallback && len(c.expiryList) > 0 {
+		rr := make([]dns.RR, len(c.expiryList))
+		for i, e := range c.expiryList {
+			rr[i] = e.rr
 		}
+		c.ExpireCallback(rr)
 	}
 }
