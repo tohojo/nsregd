@@ -53,6 +53,7 @@ type Server struct {
 	Name     string
 	cache    Cache
 	nldone   chan struct{}
+	closing  bool
 }
 
 type Addr struct {
@@ -287,6 +288,10 @@ func (s *Server) send(m *dns.Msg) bool {
 		log.Printf("Successfully registered %d addresses for name %s",
 			len(r.Answer), s.Name)
 
+		if s.closing {
+			return true
+		}
+
 		for _, rr := range r.Answer {
 			switch rr.Header().Rrtype {
 			case dns.TypeA, dns.TypeAAAA:
@@ -306,6 +311,12 @@ func (s *Server) send(m *dns.Msg) bool {
 func (s *Server) Refresh(rr []dns.RR) bool {
 	m := new(dns.Msg)
 	m.SetUpdate(s.Zone)
+
+	// We are shutting down; remove all entries
+	if s.closing {
+		m.Remove(rr)
+		return s.send(m)
+	}
 
 	// When entries expire we check if the address still exists on one of
 	// the configured interfaces, and use the current expiry time for the
@@ -432,9 +443,10 @@ func main() {
 			log.Printf("No nsregd server found for zone %s", zone)
 		} else {
 			log.Printf("Found nsregd server %s for zone %s", server.Hostname, zone)
-			if !*keep {
-				defer server.Stop()
-			}
+			defer func() {
+				server.closing = true
+				server.cache.Close(!*keep)
+			}()
 			go server.run()
 		}
 	}
