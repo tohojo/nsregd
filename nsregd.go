@@ -31,16 +31,17 @@ type Config struct {
 }
 
 type Zone struct {
-	Name        string
-	Upstreams   []NSUpstream
-	AllowedNets []string
-	AllowAnyNet bool
-	allowedNets []*net.IPNet
-	KeyDbFile   string
-	KeyTimeout  uint
-	MaxTTL      uint32
-	keydb       *KeyDb
-	cache       *Cache
+	Name          string
+	Upstreams     []NSUpstream
+	ReservedNames []string
+	AllowedNets   []string
+	AllowAnyNet   bool
+	allowedNets   []*net.IPNet
+	KeyDbFile     string
+	KeyTimeout    uint
+	MaxTTL        uint32
+	keydb         *KeyDb
+	cache         *Cache
 }
 
 type Upstream interface {
@@ -106,7 +107,20 @@ func (nsup *NSUpstream) parseArgs() {
 }
 
 func (zone *Zone) validName(name string) bool {
-	return dns.CompareDomainName(name, zone.Name) == dns.CountLabel(zone.Name) && dns.CountLabel(name)-dns.CountLabel(zone.Name) == 1
+	if dns.CompareDomainName(name, zone.Name) != dns.CountLabel(zone.Name) {
+		return false
+	}
+	if dns.CountLabel(name)-dns.CountLabel(zone.Name) != 1 {
+		return false
+	}
+
+	for _, n := range zone.ReservedNames {
+		if n+"."+zone.Name == name {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bool) {
