@@ -123,6 +123,7 @@ func (c *Cache) addRR(rr dns.RR) bool {
 		nc = make(CacheSlice, 1, 5)
 		nc[0] = &CacheEntry{rr: rr,
 			expiry: after(ttl)}
+		c.entries[name] = nc
 		c.expiryList = append(c.expiryList, nc[0])
 		sort.Sort(c.expiryList)
 		return true
