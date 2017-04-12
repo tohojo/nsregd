@@ -258,7 +258,8 @@ func (c *Cache) RemoveName(name string) bool {
 	return <-reply
 }
 
-func (c *Cache) Flush(runCallback bool) {
+func (c *Cache) Close(runCallback bool) {
+	close(c.queue)
 	if runCallback && len(c.expiryList) > 0 {
 		rr := make([]dns.RR, len(c.expiryList))
 		for i, e := range c.expiryList {

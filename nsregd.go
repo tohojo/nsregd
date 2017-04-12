@@ -420,7 +420,7 @@ func main() {
 		zone.cache = &Cache{ExpireCallback: zone.removeRRs,
 			MaxTTL: zone.MaxTTL}
 		zone.cache.Init()
-		defer zone.cache.Flush(!*keep)
+		defer zone.cache.Close(!*keep)
 
 		for _, n := range zone.AllowedNets {
 			_, net, err := net.ParseCIDR(n)
