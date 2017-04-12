@@ -225,6 +225,8 @@ func (zone *Zone) sendUpdates(records []dns.RR) bool {
 func (zone *Zone) removeName(name string) bool {
 	success := true
 
+	log.Printf("Removing name: %s", name)
+
 	records := make([]dns.RR, 1)
 	records[0] = &dns.ANY{Hdr: dns.RR_Header{Name: name, Ttl: 0, Rrtype: dns.TypeANY, Class: dns.ClassANY}}
 
@@ -237,6 +239,8 @@ func (zone *Zone) removeName(name string) bool {
 
 func (zone *Zone) removeRR(rr dns.RR) bool {
 	success := true
+
+	log.Printf("Removing RR: %s", rr)
 
 	records := make([]dns.RR, 1)
 	rr.Header().Class = dns.ClassNONE
