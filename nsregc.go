@@ -231,10 +231,33 @@ func (s *Server) run() {
 				continue
 			}
 
+			if upd.Flags&skip_addr_flags != 0 || excludeIP(upd.LinkAddress.IP) {
+				continue
+			}
+
+			a := Addr{IP: upd.LinkAddress.IP, Ttl: uint32(upd.ValidLft)}
+			rr := a.toRR(s.Name)
 			if upd.NewAddr {
-				log.Printf("New address %s on interface %s", upd.LinkAddress.IP, ifname)
+				if s.cache.Check(rr) {
+					continue
+				}
+				log.Printf("New address %s on interface %s",
+					upd.LinkAddress.IP, ifname)
+				m := new(dns.Msg)
+				m.SetUpdate(s.Zone)
+
+				m.Insert([]dns.RR{rr})
+				s.send(m)
 			} else {
-				log.Printf("Lost address %s on interface %s", upd.LinkAddress.IP, ifname)
+				log.Printf("Lost address %s on interface %s",
+					upd.LinkAddress.IP, ifname)
+				m := new(dns.Msg)
+				m.SetUpdate(s.Zone)
+
+				m.Remove([]dns.RR{rr})
+				s.send(m)
+
+				s.cache.Remove(rr)
 			}
 
 		}
