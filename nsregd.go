@@ -236,6 +236,8 @@ func (zone *Zone) removeName(name string) bool {
 		success = success && u.sendUpdate(records)
 	}
 
+	zone.cache.removeName(name)
+
 	return success
 }
 

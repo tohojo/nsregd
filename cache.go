@@ -11,6 +11,7 @@ import (
 const (
 	addRR cacheReqType = iota
 	removeRR
+	removeName
 	expireRRs
 )
 
@@ -34,6 +35,7 @@ type CacheEntry struct {
 type CacheRequest struct {
 	reqType cacheReqType
 	rr      dns.RR
+	name    string
 	reply   chan bool
 }
 
@@ -137,10 +139,20 @@ func (c *Cache) removeRR(rr dns.RR) bool {
 			if same(e.rr, rr) {
 				nc.Remove(e)
 				c.expiryList.Remove(e)
-				sort.Sort(c.expiryList)
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func (c *Cache) removeName(name string) bool {
+	if nc, ok := c.entries[name]; ok {
+		for _, e := range nc {
+			c.expiryList.Remove(e)
+		}
+		delete(c.entries, name)
+		return true
 	}
 	return false
 }
@@ -160,6 +172,8 @@ func (c *Cache) run() {
 			req.reply <- c.addRR(req.rr)
 		case removeRR:
 			req.reply <- c.removeRR(req.rr)
+		case removeName:
+			req.reply <- c.removeName(req.name)
 		case expireRRs:
 			for now := time.Now(); len(c.expiryList) > 0 && c.expiryList[0].expiry.Before(now); {
 				e := c.expiryList[0]
@@ -199,6 +213,16 @@ func (c *Cache) Remove(rr dns.RR) bool {
 	reply := make(chan bool)
 	req := CacheRequest{reqType: removeRR,
 		rr:    rr,
+		reply: reply,
+	}
+	c.queue <- req
+	return <-reply
+}
+
+func (c *Cache) RemoveName(name string) bool {
+	reply := make(chan bool)
+	req := CacheRequest{reqType: removeName,
+		name:  name,
 		reply: reply,
 	}
 	c.queue <- req
