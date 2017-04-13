@@ -44,6 +44,7 @@ type Config struct {
 	Interfaces     []string
 	ExcludeNets    []string
 	MaxTTL         uint32
+	Timeout        string
 	excludedNets   []*net.IPNet
 }
 
@@ -107,6 +108,7 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 	if tcp {
 		c.Net = "tcp"
 	}
+	c.Timeout, _ = time.ParseDuration(config.Timeout)
 	m := new(dns.Msg)
 	m.SetQuestion(srvname+"."+zone, dns.TypeSRV)
 	m.SetEdns0(4096, true)
@@ -269,6 +271,7 @@ func (s *Server) run() {
 func (s *Server) send(m *dns.Msg) bool {
 	c := new(dns.Client)
 	c.Net = "tcp"
+	c.Timeout, _ = time.ParseDuration(config.Timeout)
 
 	log.Printf("Sending update with %d addresses for name %s",
 		len(m.Ns), s.Name)
