@@ -1,0 +1,9 @@
+{
+"Name": "example-client",
+"KeyFile": "example.key",
+"PrivateKeyFile": "example.private",
+"KeyTTL": 2592000,
+"Interfaces": ["eth0"],
+"ExcludeNets": ["127.0.0.0/8", "::1/128", "fd00::/8", "fe80::/10"],
+"MaxTTL": 3600,
+"Timeout": "10s"}
