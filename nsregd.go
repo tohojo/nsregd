@@ -150,7 +150,7 @@ func (zone *Zone) validName(name string) bool {
 	return true
 }
 
-func (zone *Zone) verifySig(m *dns.Msg, ipAllowed bool, reply *dns.Msg) (name string, success bool) {
+func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name string, success bool) {
 
 	var (
 		sigrr *dns.SIG
@@ -195,12 +195,11 @@ func (zone *Zone) verifySig(m *dns.Msg, ipAllowed bool, reply *dns.Msg) (name st
 	if ok {
 		/* Found existing key, verify sig */
 		if key.KeyTag != sigrr.KeyTag {
-			log.Printf("Existing key for %s has different keytag than SIG", name)
+			log.Printf("Got sig for %s with wrong keytag from %s.", name, remoteIP)
 			setError(reply, name, dns.RcodeRefused,
 				"Invalid key for name")
 			return
 		}
-		log.Printf("Found existing key for %s", name)
 		keyrr = new(dns.KEY)
 		keyrr.Hdr.Name = name
 		keyrr.Hdr.Rrtype = dns.TypeKEY
@@ -211,30 +210,31 @@ func (zone *Zone) verifySig(m *dns.Msg, ipAllowed bool, reply *dns.Msg) (name st
 
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
-			log.Printf("Verified sig for %s", name)
+			log.Printf("Verified sig with existing key for %s from %s.",
+				name, remoteIP)
 			zone.keydb.Refresh(name)
 			return name, true
 		} else {
-			log.Printf("Failed to verify sig for %s", name)
+			log.Printf("Failed to verify sig for %s from %s.", name, remoteIP)
 			setError(reply, name, dns.RcodeNotAuth,
 				"Signature verifyication failed")
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
-		if !ipAllowed {
-			log.Printf("Remote addr not allowed to add new key")
+		if !zone.isIPAllowed(remoteIP) {
+			log.Printf("Disallowed attempt from  %s to add new key.", remoteIP)
 			setError(reply, name, dns.RcodeRefused,
 				"Remote addr not allowed to add new key")
 			return
 		}
 		if !zone.validName(name) {
-			log.Printf("Invalid new name %s", name)
+			log.Printf("Got disallowed new name %s from %s.", name, remoteIP)
 			setError(reply, name, dns.RcodeRefused,
 				"Name disallowed by server config")
 			return
 		}
 		if keyrr == nil {
-			log.Printf("No existing key found for %s and no KEY record in query", name)
+			log.Printf("Got query for %s without KEY from %s.", name, remoteIP)
 			setError(reply, zone.Name, dns.RcodeFormatError,
 				"No KEY RR found")
 			return
@@ -242,7 +242,7 @@ func (zone *Zone) verifySig(m *dns.Msg, ipAllowed bool, reply *dns.Msg) (name st
 
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
-			log.Printf("Verified sig with new key for %s", name)
+			log.Printf("Verified sig with new key for %s from %s.", name, remoteIP)
 			key = &Key{
 				Name:      name,
 				Flags:     keyrr.Flags,
@@ -367,11 +367,12 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if r.MsgHdr.Opcode != dns.OpcodeUpdate {
+		log.Printf("Got non-update query from %s.", remoteIP)
 		setError(m, zone.Name, dns.RcodeRefused, "Non-update query refused")
 		goto out
 	}
 
-	name, ok = zone.verifySig(r, zone.isIPAllowed(remoteIP), m)
+	name, ok = zone.verifySig(r, remoteIP, m)
 	if !ok {
 		goto out
 	}
@@ -380,19 +381,20 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 	for _, rr := range r.Ns {
 		if rr.Header().Name != name {
-			log.Printf("Got record for wrong name %s", rr.Header().Name)
+			log.Printf("Got malformed query from %s (record for wrong name %s).",
+				remoteIP, rr.Header().Name)
 			setError(m, rr.Header().Name, dns.RcodeRefused,
 				"Found record with non-authorized name")
 			goto out
 		}
-
-		switch rr.Header().Rrtype {
+		rrtype := rr.Header().Rrtype
+		switch rrtype {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := getIP(rr)
-			t := dns.TypeToString[rr.Header().Rrtype]
+			t := dns.TypeToString[rrtype]
 			if !zone.AllowAnyNet && !zone.isIPAllowed(ip) {
-				log.Printf("Got %s record for %s outside allowed ranges. Skipping.",
-					t, ip)
+				log.Printf("Skipping %s record for %s outside allowed ranges from %s.",
+					t, ip, remoteIP)
 				continue
 			}
 			if rr.Header().Ttl == 0 {
@@ -402,19 +404,22 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 						"TTL 0 record with class != NONE")
 					goto out
 				}
-				log.Printf("Got removal for %s record for address %s", t, ip)
+				log.Printf("Got removal for %s record for address %s from %s.",
+					t, ip, remoteIP)
 				zone.cache.Remove(rr)
 				records = append(records, rr)
 			} else if zone.cache.Add(rr) {
-				log.Printf("Got new %s record for address %s with TTL %d",
-					t, ip, rr.Header().Ttl)
+				log.Printf("Got new %s record for address %s with TTL %d from %s.",
+					t, ip, rr.Header().Ttl, remoteIP)
 				records = append(records, rr)
 			} else {
-				log.Printf("Refreshed %s record for address %s with TTL %d",
-					t, ip, rr.Header().Ttl)
+				log.Printf("Refreshed %s record for address %s with TTL %d from %s.",
+					t, ip, rr.Header().Ttl, remoteIP)
 			}
 			m.Answer = append(m.Answer, rr)
 		default:
+			log.Printf("Got query with invalid record type %d from %s.",
+				rrtype, remoteIP)
 			setError(m, name, dns.RcodeRefused, "Invalid record type in query")
 			goto out
 		}
@@ -422,7 +427,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if len(records) == 0 {
-		log.Print("No new (non-cached) records, not sending update")
+		log.Print("No new (non-cached) records, not sending update.")
 	} else if !zone.sendUpdates(records) {
 		setError(m, name,
 			dns.RcodeServerFailure, "Unable to update upstream servers")
@@ -430,7 +435,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 
 out:
 	if *printf {
-		log.Printf("Sending reply: %v", m.String())
+		log.Printf("Sending reply to %s: %v", remoteIP, m.String())
 	}
 
 	err := w.WriteMsg(m)
