@@ -268,6 +268,17 @@ func (s *Server) run() {
 
 }
 
+func getMessage(m *dns.Msg) string {
+	if m == nil || len(m.Extra) == 0 || m.Extra[0].Header().Rrtype != dns.TypeTXT {
+		return ""
+	}
+	txt := m.Extra[0].(*dns.TXT)
+	if len(txt.Txt) == 0 {
+		return ""
+	}
+	return txt.Txt[0]
+}
+
 func (s *Server) send(m *dns.Msg) bool {
 	c := new(dns.Client)
 	c.Net = "tcp"
@@ -281,11 +292,26 @@ func (s *Server) send(m *dns.Msg) bool {
 	if *printf {
 		fmt.Println(r)
 	}
-	if err != nil {
-		log.Printf("Unable to send update packet: %s", err)
+
+	if err != nil || r.Rcode == dns.RcodeServerFailure {
+		if err != nil {
+			log.Printf("Network error while sending update: %s", err)
+		} else {
+			log.Printf("Server signaled error: %s", getMessage(r))
+		}
+
+		if !s.closing {
+			log.Printf("Queueing RRs for retry in %d seconds", 10)
+			for _, rr := range m.Ns {
+				rr.Header().Ttl = 10
+				s.cache.Add(rr)
+			}
+		}
 		return false
 	} else if r.Rcode != dns.RcodeSuccess {
-		log.Printf("Registration failed with code: %s", dns.RcodeToString[r.Rcode])
+		log.Printf("Server refused registration. Code: %s. Message: %s",
+			dns.RcodeToString[r.Rcode], getMessage(r))
+		s.Stop()
 		return false
 	} else {
 		if s.closing {
