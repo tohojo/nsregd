@@ -32,7 +32,8 @@ type Config struct {
 
 type Zone struct {
 	Name          string
-	Upstreams     []NSUpstream
+	Upstreams     UpstreamList
+	upstreams     []Upstream
 	ReservedNames []string
 	AllowedNets   []string
 	AllowAnyNet   bool
@@ -42,6 +43,10 @@ type Zone struct {
 	MaxTTL        uint32
 	keydb         *KeyDb
 	cache         *Cache
+}
+
+type UpstreamList struct {
+	NSUpdate []NSUpstream
 }
 
 type Upstream interface {
@@ -228,11 +233,11 @@ func (zone *Zone) isIPAllowed(ip net.IP) bool {
 func (zone *Zone) sendUpdates(records []dns.RR) bool {
 	success := true
 
-	if len(zone.Upstreams) == 0 {
+	if len(zone.upstreams) == 0 {
 		log.Printf("No upstreams configured for zone %s", zone.Name)
 		return false
 	}
-	for _, u := range zone.Upstreams {
+	for _, u := range zone.upstreams {
 		success = success && u.sendUpdate(records)
 	}
 	return success
@@ -246,7 +251,7 @@ func (zone *Zone) removeName(name string) bool {
 	records := make([]dns.RR, 1)
 	records[0] = &dns.ANY{Hdr: dns.RR_Header{Name: name, Ttl: 0, Rrtype: dns.TypeANY, Class: dns.ClassANY}}
 
-	for _, u := range zone.Upstreams {
+	for _, u := range zone.upstreams {
 		success = success && u.sendUpdate(records)
 	}
 
@@ -267,7 +272,7 @@ func (zone *Zone) removeRRs(rr []dns.RR) bool {
 		records = append(records, r)
 	}
 
-	for _, u := range zone.Upstreams {
+	for _, u := range zone.upstreams {
 		success = success && u.sendUpdate(records)
 	}
 
@@ -419,8 +424,10 @@ func main() {
 	for _, zone := range config.Zones {
 		zone.Name = dns.Fqdn(zone.Name)
 
-		for _, upstream := range zone.Upstreams {
+		zone.upstreams = make([]Upstream, 0)
+		for _, upstream := range zone.Upstreams.NSUpdate {
 			upstream.parseArgs()
+			zone.upstreams = append(zone.upstreams, &upstream)
 		}
 
 		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout, zone.removeName)
