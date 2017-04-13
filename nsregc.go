@@ -517,7 +517,6 @@ func main() {
 	default:
 		log.Panic("No KEY in keyfile")
 	}
-	fmt.Printf("%s\n", keyrr)
 	fi, err = os.Open(config.PrivateKeyFile)
 	if err != nil {
 		log.Panic(err)
