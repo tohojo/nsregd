@@ -172,10 +172,17 @@ func (c *Cache) removeName(name string) bool {
 
 func (c *Cache) run() {
 
+	done := make(chan bool)
+
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			c.queue <- CacheRequest{reqType: expireRRs}
+			select {
+			case <-done:
+				return
+			default:
+				c.queue <- CacheRequest{reqType: expireRRs}
+			}
 		}
 	}()
 
@@ -204,6 +211,7 @@ func (c *Cache) run() {
 			}
 		}
 	}
+	done <- true
 }
 
 func (c *Cache) clampTTL(rr dns.RR) uint32 {

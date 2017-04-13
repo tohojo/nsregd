@@ -44,10 +44,16 @@ type keyRequest struct {
 }
 
 func (db *KeyDb) run() {
+	done := make(chan bool)
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			db.queue <- keyRequest{reqType: expireKeys}
+			select {
+			case <-done:
+				return
+			default:
+				db.queue <- keyRequest{reqType: expireKeys}
+			}
 		}
 	}()
 
@@ -86,6 +92,7 @@ func (db *KeyDb) run() {
 			}
 		}
 	}
+	done <- true
 }
 
 func NewKeyDb(filename string, keytimeout uint, callback func(name string) bool) (*KeyDb, error) {
