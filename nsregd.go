@@ -67,6 +67,19 @@ type NSUpstream struct {
 	client     *dns.Client
 }
 
+func setError(m *dns.Msg, name string, code int, msg string) {
+	m.Rcode = code
+	if m.Extra == nil {
+		m.Extra = make([]dns.RR, 0, 1)
+	}
+	m.Extra = append(m.Extra, &dns.TXT{
+		Hdr: dns.RR_Header{Name: name,
+			Rrtype: dns.TypeTXT,
+			Ttl:    0,
+			Class:  dns.ClassANY},
+		Txt: []string{msg}})
+}
+
 func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 	upd := new(dns.Msg)
 	upd.SetUpdate(nsup.Zone)
@@ -137,22 +150,26 @@ func (zone *Zone) validName(name string) bool {
 	return true
 }
 
-func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bool) {
+func (zone *Zone) verifySig(m *dns.Msg, ipAllowed bool, reply *dns.Msg) (name string, success bool) {
 
 	var (
 		sigrr *dns.SIG
 		keyrr *dns.KEY
 	)
 
-	for _, rr := range r.Extra {
+	for _, rr := range m.Extra {
 		if k, ok := rr.(*dns.KEY); ok {
 			if keyrr != nil {
+				setError(reply, rr.Header().Name, dns.RcodeFormatError,
+					"Duplicate KEY RR")
 				return
 			}
 			keyrr = k
 		}
 		if s, ok := rr.(*dns.SIG); ok {
 			if sigrr != nil {
+				setError(reply, rr.Header().Name, dns.RcodeFormatError,
+					"Duplicate SIG RR")
 				return
 			}
 			sigrr = s
@@ -160,13 +177,17 @@ func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bo
 	}
 
 	if sigrr == nil {
+		setError(reply, zone.Name, dns.RcodeFormatError,
+			"No SIG RR found")
 		return
 	}
 
 	name = sigrr.SignerName
 
-	buf, err := r.Pack()
+	buf, err := m.Pack()
 	if err != nil {
+		setError(reply, zone.Name, dns.RcodeFormatError,
+			"Error verifying signature")
 		return
 	}
 
@@ -175,6 +196,8 @@ func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bo
 		/* Found existing key, verify sig */
 		if key.KeyTag != sigrr.KeyTag {
 			log.Printf("Existing key for %s has different keytag than SIG", name)
+			setError(reply, name, dns.RcodeRefused,
+				"Invalid key for name")
 			return
 		}
 		log.Printf("Found existing key for %s", name)
@@ -193,19 +216,27 @@ func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bo
 			return name, true
 		} else {
 			log.Printf("Failed to verify sig for %s", name)
+			setError(reply, name, dns.RcodeNotAuth,
+				"Signature verifyication failed")
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
 		if !ipAllowed {
 			log.Printf("Remote addr not allowed to add new key")
+			setError(reply, name, dns.RcodeRefused,
+				"Remote addr not allowed to add new key")
 			return
 		}
 		if !zone.validName(name) {
 			log.Printf("Invalid new name %s", name)
+			setError(reply, name, dns.RcodeRefused,
+				"Invalid name")
 			return
 		}
 		if keyrr == nil {
 			log.Printf("No existing key found for %s and no KEY record in query", name)
+			setError(reply, zone.Name, dns.RcodeFormatError,
+				"No KEY RR found")
 			return
 		}
 
@@ -224,6 +255,8 @@ func (zone *Zone) verifySig(r *dns.Msg, ipAllowed bool) (name string, success bo
 			}
 		}
 	}
+	setError(reply, zone.Name, dns.RcodeNotAuth,
+		"Signature verification failed")
 
 	return name, false
 }
@@ -334,13 +367,12 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if r.MsgHdr.Opcode != dns.OpcodeUpdate {
-		m.Rcode = dns.RcodeRefused
+		setError(m, zone.Name, dns.RcodeRefused, "Non-update query refused")
 		goto out
 	}
 
-	name, ok = zone.verifySig(r, zone.isIPAllowed(remoteIP))
+	name, ok = zone.verifySig(r, zone.isIPAllowed(remoteIP), m)
 	if !ok {
-		m.Rcode = dns.RcodeNotAuth
 		goto out
 	}
 
@@ -349,7 +381,8 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	for _, rr := range r.Ns {
 		if rr.Header().Name != name {
 			log.Printf("Got record for wrong name %s", rr.Header().Name)
-			m.Rcode = dns.RcodeRefused
+			setError(m, rr.Header().Name, dns.RcodeRefused,
+				"Found record with non-authorized name")
 			goto out
 		}
 
@@ -364,7 +397,9 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 			}
 			if rr.Header().Ttl == 0 {
 				if rr.Header().Class != dns.ClassNONE {
-					m.Rcode = dns.RcodeFormatError
+					setError(m, name,
+						dns.RcodeFormatError,
+						"TTL 0 record with class != NONE")
 					goto out
 				}
 				log.Printf("Got removal for %s record for address %s", t, ip)
@@ -380,7 +415,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 			}
 			m.Answer = append(m.Answer, rr)
 		default:
-			m.Rcode = dns.RcodeRefused
+			setError(m, name, dns.RcodeRefused, "Invalid record type in query")
 			goto out
 		}
 
@@ -389,17 +424,18 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	if len(records) == 0 {
 		log.Print("No new (non-cached) records, not sending update")
 	} else if !zone.sendUpdates(records) {
-		m.Rcode = dns.RcodeServerFailure
+		setError(m, name,
+			dns.RcodeServerFailure, "Unable to update upstream servers")
 	}
 
 out:
 	if *printf {
-		fmt.Printf("Sending reply: %v\n", m.String())
+		log.Printf("Sending reply: %v", m.String())
 	}
 
 	err := w.WriteMsg(m)
 	if err != nil {
-		fmt.Printf("error on write: %s\n", err.Error())
+		log.Printf("error on write: %s", err.Error())
 	}
 }
 
