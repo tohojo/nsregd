@@ -230,7 +230,7 @@ func (zone *Zone) verifySig(m *dns.Msg, ipAllowed bool, reply *dns.Msg) (name st
 		if !zone.validName(name) {
 			log.Printf("Invalid new name %s", name)
 			setError(reply, name, dns.RcodeRefused,
-				"Invalid name")
+				"Name disallowed by server config")
 			return
 		}
 		if keyrr == nil {
