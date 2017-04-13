@@ -58,6 +58,7 @@ type Config struct {
 	Name           string
 	KeyFile        string
 	PrivateKeyFile string
+	KeyTTL         uint32
 	Interfaces     []string
 	ExcludeNets    []string
 	MaxTTL         uint32
@@ -457,6 +458,7 @@ func main() {
 		log.Panic(err)
 	}
 	privkey, err = keyrr.ReadPrivateKey(fi, config.KeyFile)
+	keyrr.Hdr.Ttl = config.KeyTTL
 
 	/* borrowed from 'q' utility in dns library examples */
 	var nameserver string
