@@ -51,7 +51,7 @@ type UpstreamList struct {
 
 type Upstream interface {
 	sendUpdate(records []dns.RR) bool
-	parseArgs()
+	Init()
 }
 
 type NSUpstream struct {
@@ -62,6 +62,8 @@ type NSUpstream struct {
 	TSigName   string
 	TSigSecret string
 	MaxTTL     uint32
+	TCP        bool
+	client     *dns.Client
 }
 
 func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
@@ -78,10 +80,6 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 
 	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
 
-	c := new(dns.Client)
-	c.TsigSecret = make(map[string]string)
-	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
-
 	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
 
 	log.Printf("Sending nsupdate to %s with %d names", hostname, len(upd.Ns))
@@ -90,7 +88,7 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 		fmt.Printf("Update message: %s", upd)
 	}
 
-	r, _, err := c.Exchange(upd, hostname)
+	r, _, err := nsup.client.Exchange(upd, hostname)
 
 	if err != nil {
 		log.Printf("Error updating upstream DNS: %s", err)
@@ -106,9 +104,18 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 	return true
 }
 
-func (nsup *NSUpstream) parseArgs() {
+func (nsup *NSUpstream) Init() {
 	nsup.TSigName = dns.Fqdn(nsup.TSigName)
 	nsup.Zone = dns.Fqdn(nsup.Zone)
+
+	c := new(dns.Client)
+	if nsup.TCP {
+		c.Net = "tcp"
+	}
+	c.TsigSecret = make(map[string]string)
+	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
+
+	nsup.client = c
 }
 
 func (zone *Zone) validName(name string) bool {
@@ -426,7 +433,7 @@ func main() {
 
 		zone.upstreams = make([]Upstream, 0)
 		for _, upstream := range zone.Upstreams.NSUpdate {
-			upstream.parseArgs()
+			upstream.Init()
 			zone.upstreams = append(zone.upstreams, &upstream)
 		}
 
