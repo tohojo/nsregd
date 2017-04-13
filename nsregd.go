@@ -63,6 +63,7 @@ type NSUpstream struct {
 	TSigSecret string
 	MaxTTL     uint32
 	TCP        bool
+	Timeout    string
 	client     *dns.Client
 }
 
@@ -112,6 +113,7 @@ func (nsup *NSUpstream) Init() {
 	if nsup.TCP {
 		c.Net = "tcp"
 	}
+	c.Timeout, _ = time.ParseDuration(nsup.Timeout)
 	c.TsigSecret = make(map[string]string)
 	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
 
