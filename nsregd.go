@@ -404,12 +404,6 @@ out:
 }
 
 func serve(addr string, port int) {
-	laddr := addr + ":" + strconv.Itoa(port)
-	server := &dns.Server{Addr: laddr, Net: "tcp"}
-	log.Printf("Starting server on %s (tcp)", laddr)
-	if err := server.ListenAndServe(); err != nil {
-		fmt.Printf("Failed to setup the server: %s\n", err.Error())
-	}
 
 }
 
@@ -463,11 +457,27 @@ func main() {
 		dns.HandleFunc(zone.Name, zone.handleRegd)
 	}
 
-	go serve(config.ListenAddr, config.ListenPort)
+	laddr := config.ListenAddr + ":" + strconv.Itoa(config.ListenPort)
+	server := &dns.Server{Addr: laddr, Net: "tcp"}
+	log.Printf("Starting server on %s (tcp)", laddr)
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil {
+			switch e := err.(type) {
+			case *net.OpError:
+				if e.Op == "accept" && e.Err.Error() == "use of closed network connection" {
+					// We get this when shutting down, so don't complain about it
+					return
+				}
+			}
+			fmt.Printf("Failed to setup the server: %s\n", err.Error())
+		}
+	}()
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sig
 	fmt.Printf("Signal (%s) received, stopping\n", s)
 
+	server.Shutdown()
 }
