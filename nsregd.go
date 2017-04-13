@@ -56,7 +56,7 @@ type Zone struct {
 	AllowAnyNet   bool
 	allowedNets   []*net.IPNet
 	KeyDbFile     string
-	KeyTimeout    uint
+	MaxKeyTTL     uint32
 	MaxTTL        uint32
 	keydb         *KeyDb
 	cache         *Cache
@@ -198,6 +198,18 @@ func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name s
 			"No SIG RR found")
 		return
 	}
+	if keyrr == nil {
+		log.Printf("Got query for %s without KEY from %s.", name, remoteIP)
+		setError(reply, zone.Name, dns.RcodeFormatError,
+			"No KEY RR found")
+		return
+	}
+	if keyrr.Header().Ttl == 0 {
+		log.Printf("Got query for %s with 0-TTL KEY from %s.", name, remoteIP)
+		setError(reply, zone.Name, dns.RcodeFormatError,
+			"KEY RR must have TTL>0")
+		return
+	}
 
 	name = sigrr.SignerName
 
@@ -217,19 +229,23 @@ func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name s
 				"Invalid key for name")
 			return
 		}
-		keyrr = new(dns.KEY)
-		keyrr.Hdr.Name = name
-		keyrr.Hdr.Rrtype = dns.TypeKEY
-		keyrr.Flags = key.Flags
-		keyrr.Protocol = key.Protocol
-		keyrr.Algorithm = key.Algorithm
-		keyrr.PublicKey = key.PublicKey
+		if keyrr.Hdr.Name != name ||
+			keyrr.Flags != key.Flags ||
+			keyrr.Protocol != key.Protocol ||
+			keyrr.Algorithm != key.Algorithm ||
+			keyrr.PublicKey != key.PublicKey {
+
+			log.Printf("Got wrong KEY for %s from %s.", name, remoteIP)
+			setError(reply, name, dns.RcodeRefused,
+				"Invalid KEY for name")
+			return
+		}
 
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
 			log.Printf("Verified sig with existing key for %s from %s.",
 				name, remoteIP)
-			zone.keydb.Refresh(name)
+			zone.keydb.Refresh(name, keyrr.Header().Ttl)
 			return name, true
 		} else {
 			log.Printf("Failed to verify sig for %s from %s.", name, remoteIP)
@@ -250,12 +266,6 @@ func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name s
 				"Name disallowed by server config")
 			return
 		}
-		if keyrr == nil {
-			log.Printf("Got query for %s without KEY from %s.", name, remoteIP)
-			setError(reply, zone.Name, dns.RcodeFormatError,
-				"No KEY RR found")
-			return
-		}
 
 		err := sigrr.Verify(keyrr, buf)
 		if err == nil {
@@ -267,7 +277,7 @@ func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name s
 				Algorithm: keyrr.Algorithm,
 				KeyTag:    keyrr.KeyTag(),
 				PublicKey: keyrr.PublicKey}
-			if zone.keydb.Add(key) {
+			if zone.keydb.Add(key, keyrr.Header().Ttl) {
 				return name, true
 			}
 		}
@@ -491,7 +501,7 @@ func main() {
 			zone.upstreams = append(zone.upstreams, &upstream)
 		}
 
-		kdb, err := NewKeyDb(zone.KeyDbFile, zone.KeyTimeout, zone.removeName)
+		kdb, err := NewKeyDb(zone.KeyDbFile, zone.MaxKeyTTL, zone.removeName)
 		if err != nil {
 			return
 		}

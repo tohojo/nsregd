@@ -38,7 +38,7 @@ type keyReqType int
 type KeyDb struct {
 	keys           map[string]*Key
 	queue          chan keyRequest
-	timeout        time.Duration
+	maxttl         uint32
 	keyfile        string
 	expireCallback func(name string) bool
 }
@@ -57,7 +57,15 @@ type keyRequest struct {
 	reqType    keyReqType
 	name       string
 	key        *Key
+	ttl        uint32
 	resultChan chan *Key
+}
+
+func (db *KeyDb) getExpiry(ttl uint32) time.Time {
+	if ttl > db.maxttl {
+		ttl = db.maxttl
+	}
+	return time.Now().Add(time.Duration(ttl) * time.Second)
 }
 
 func (db *KeyDb) run() {
@@ -78,7 +86,7 @@ func (db *KeyDb) run() {
 		switch req.reqType {
 		case addKey:
 			if _, ok := db.keys[req.key.Name]; !ok {
-				req.key.Expiry = time.Now().Add(db.timeout)
+				req.key.Expiry = db.getExpiry(req.ttl)
 				db.keys[req.key.Name] = req.key
 				req.resultChan <- nil
 			} else {
@@ -94,7 +102,7 @@ func (db *KeyDb) run() {
 
 		case refreshKey:
 			if key, ok := db.keys[req.name]; ok {
-				key.Expiry = time.Now().Add(db.timeout)
+				key.Expiry = db.getExpiry(req.ttl)
 				req.resultChan <- nil
 			} else {
 				close(req.resultChan)
@@ -112,11 +120,11 @@ func (db *KeyDb) run() {
 	done <- true
 }
 
-func NewKeyDb(filename string, keytimeout uint, callback func(name string) bool) (*KeyDb, error) {
+func NewKeyDb(filename string, maxttl uint32, callback func(name string) bool) (*KeyDb, error) {
 	db := KeyDb{
 		keys:           make(map[string]*Key),
 		queue:          make(chan keyRequest),
-		timeout:        time.Duration(keytimeout) * time.Second,
+		maxttl:         maxttl,
 		keyfile:        filename,
 		expireCallback: callback}
 
@@ -172,10 +180,11 @@ func (db *KeyDb) Stop() {
 	}
 }
 
-func (db *KeyDb) Add(key *Key) bool {
+func (db *KeyDb) Add(key *Key, ttl uint32) bool {
 	req := keyRequest{
 		reqType:    addKey,
 		key:        key,
+		ttl:        ttl,
 		resultChan: make(chan *Key)}
 	db.queue <- req
 	_, ok := <-req.resultChan
@@ -192,10 +201,11 @@ func (db *KeyDb) Get(name string) (*Key, bool) {
 	return key, ok
 }
 
-func (db *KeyDb) Refresh(name string) bool {
+func (db *KeyDb) Refresh(name string, ttl uint32) bool {
 	req := keyRequest{
 		reqType:    refreshKey,
 		name:       name,
+		ttl:        ttl,
 		resultChan: make(chan *Key)}
 	db.queue <- req
 	_, ok := <-req.resultChan
