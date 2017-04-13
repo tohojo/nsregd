@@ -55,6 +55,7 @@ type Server struct {
 	cache    Cache
 	nldone   chan struct{}
 	closing  bool
+	finished chan bool
 }
 
 type Addr struct {
@@ -309,8 +310,8 @@ func (s *Server) send(m *dns.Msg) bool {
 		}
 		return false
 	} else if r.Rcode != dns.RcodeSuccess {
-		log.Printf("Server refused registration. Code: %s. Message: %s",
-			dns.RcodeToString[r.Rcode], getMessage(r))
+		log.Printf("Server %s refused registration. Code: %s. Message: %s",
+			s.Hostname, dns.RcodeToString[r.Rcode], getMessage(r))
 		s.Stop()
 		return false
 	} else {
@@ -383,6 +384,7 @@ func (s *Server) Refresh(rr []dns.RR) bool {
 
 func (s *Server) Stop() {
 	close(s.nldone)
+	s.finished <- true
 }
 
 func main() {
@@ -472,12 +474,16 @@ func main() {
 
 	log.Printf("Using nameserver %s", nameserver)
 
+	servers := 0
+	exit := make(chan bool, len(zones))
 	for _, zone := range zones {
 		server, ok := getServer(zone, nameserver, *tcp)
 		if !ok {
 			log.Printf("No nsregd server found for zone %s", zone)
 		} else {
 			log.Printf("Found nsregd server %s for zone %s", server.Hostname, zone)
+			servers += 1
+			server.finished = exit
 			defer func() {
 				server.closing = true
 				server.cache.Close(!*keep)
@@ -488,6 +494,16 @@ func main() {
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	s := <-sig
-	fmt.Printf("Signal (%s) received, stopping\n", s)
+
+	for servers > 0 {
+		select {
+		case <-exit:
+			servers -= 1
+		case s := <-sig:
+			log.Printf("Signal (%s) received, stopping", s)
+			return
+		}
+	}
+
+	log.Printf("No more active servers. Exiting.")
 }
