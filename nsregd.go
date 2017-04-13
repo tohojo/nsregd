@@ -471,8 +471,17 @@ out:
 	}
 }
 
-func serve(addr string, port int) {
-
+func serve(server *dns.Server) {
+	if err := server.ListenAndServe(); err != nil {
+		switch e := err.(type) {
+		case *net.OpError:
+			if e.Op == "accept" && e.Err.Error() == "use of closed network connection" {
+				// We get this when shutting down, so don't complain about it
+				return
+			}
+		}
+		fmt.Printf("Failed to setup the server: %s\n", err.Error())
+	}
 }
 
 func main() {
@@ -526,26 +535,19 @@ func main() {
 	}
 
 	laddr := config.ListenAddr + ":" + strconv.Itoa(config.ListenPort)
-	server := &dns.Server{Addr: laddr, Net: "tcp"}
-	log.Printf("Starting server on %s (tcp)", laddr)
+	server4 := &dns.Server{Addr: laddr, Net: "tcp4"}
+	log.Printf("Starting server on %s (tcp4)", laddr)
+	go serve(server4)
 
-	go func() {
-		if err := server.ListenAndServe(); err != nil {
-			switch e := err.(type) {
-			case *net.OpError:
-				if e.Op == "accept" && e.Err.Error() == "use of closed network connection" {
-					// We get this when shutting down, so don't complain about it
-					return
-				}
-			}
-			fmt.Printf("Failed to setup the server: %s\n", err.Error())
-		}
-	}()
+	server6 := &dns.Server{Addr: laddr, Net: "tcp6"}
+	log.Printf("Starting server on %s (tcp6)", laddr)
+	go serve(server6)
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	s := <-sig
 	fmt.Printf("Signal (%s) received, stopping\n", s)
 
-	server.Shutdown()
+	server4.Shutdown()
+	server6.Shutdown()
 }
