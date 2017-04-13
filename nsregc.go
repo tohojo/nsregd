@@ -439,7 +439,7 @@ func GenerateKey() {
 
 	pk := privkey.(*ecdsa.PrivateKey)
 
-	fi, err = os.Create(config.PrivateKeyFile)
+	fi, err = os.OpenFile(config.PrivateKeyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		log.Panic(err)
 	}
