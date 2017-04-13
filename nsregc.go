@@ -26,11 +26,11 @@ const (
 )
 
 var (
-	printf   = flag.Bool("print", false, "print replies")
+	printf   = flag.Bool("print", false, "Print replies")
 	conffile = flag.String("conffile", "nsregc.conf", "Config file")
-	port     = flag.Int("port", 53, "port number to use")
+	port     = flag.Int("port", 53, "Port number to use for initial query")
 	tcp      = flag.Bool("tcp", false, "Use TCP for initial SRV query")
-	keep     = flag.Bool("keep", false, "do not flush entries from upstreams on shutdown")
+	keep     = flag.Bool("keep", false, "Do not remove records on shutdown")
 	config   Config
 
 	keyrr   *dns.KEY
