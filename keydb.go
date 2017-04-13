@@ -162,7 +162,7 @@ func (db *KeyDb) Stop() {
 		}
 
 		fn := fmt.Sprintf("%s.tmp", db.keyfile)
-		fp, err := os.Create(fn)
+		fp, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
 			log.Fatal(err)
 		}
