@@ -29,6 +29,8 @@ import (
 	"syscall"
 	"time"
 
+	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/json"
 	"io/ioutil"
 	"os/signal"
@@ -48,6 +50,7 @@ var (
 	port     = flag.Int("port", 53, "Port number to use for initial query")
 	tcp      = flag.Bool("tcp", false, "Use TCP for initial SRV query")
 	keep     = flag.Bool("keep", false, "Do not remove records on shutdown")
+	genkey   = flag.Bool("genkey", false, "Generate key")
 	config   Config
 
 	keyrr   *dns.KEY
@@ -405,6 +408,62 @@ func (s *Server) Stop() {
 	s.finished <- true
 }
 
+func GenerateKey() {
+	if _, err := os.Stat(config.KeyFile); err == nil {
+		fmt.Printf("Keyfile %s already exists. Not generating.\n",
+			config.KeyFile)
+		return
+	}
+	if _, err := os.Stat(config.PrivateKeyFile); err == nil {
+		fmt.Printf("PrivateKeyfile %s already exists. Not generating.\n",
+			config.PrivateKeyFile)
+		return
+	}
+
+	keyrr := &dns.KEY{dns.DNSKEY{
+		Hdr:       dns.RR_Header{Name: dns.Fqdn(config.Name), Rrtype: dns.TypeKEY, Class: dns.ClassINET},
+		Flags:     256,
+		Protocol:  3,
+		Algorithm: dns.ECDSAP384SHA384}}
+	privkey, err := keyrr.Generate(384)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	fi, err := os.Create(config.KeyFile)
+	if err != nil {
+		log.Panic(err)
+	}
+	fi.Write([]byte(keyrr.String()))
+	fi.Close()
+
+	pk := privkey.(*ecdsa.PrivateKey)
+
+	fi, err = os.Create(config.PrivateKeyFile)
+	if err != nil {
+		log.Panic(err)
+	}
+
+	now := time.Now()
+	time := fmt.Sprintf("%04d%02d%02d%02d%02d%02d",
+		now.Year(),
+		now.Month(),
+		now.Day(),
+		now.Hour(),
+		now.Minute(),
+		now.Second())
+	fmt.Fprintf(fi, "Private-key-format: v1.3\n")
+	fmt.Fprintf(fi, "Algorithm: %d (%s)\n",
+		keyrr.Algorithm, dns.AlgorithmToString[keyrr.Algorithm])
+	fmt.Fprintf(fi, "PrivateKey: %s\n", base64.StdEncoding.EncodeToString(pk.D.Bytes()))
+	fmt.Fprintf(fi, "Created: %s\n", time)
+	fmt.Fprintf(fi, "Publish: %s\n", time)
+	fmt.Fprintf(fi, "Activate: %s\n", time)
+	fi.Close()
+
+	fmt.Printf("Key generation successful.\n")
+}
+
 func main() {
 	var (
 		zones []string
@@ -434,6 +493,11 @@ func main() {
 		config.excludedNets = append(config.excludedNets, net)
 	}
 
+	if *genkey {
+		GenerateKey()
+		return
+	}
+
 	fi, err := os.Open(config.KeyFile)
 	if err != nil {
 		log.Panic(err)
@@ -453,11 +517,15 @@ func main() {
 	default:
 		log.Panic("No KEY in keyfile")
 	}
+	fmt.Printf("%s\n", keyrr)
 	fi, err = os.Open(config.PrivateKeyFile)
 	if err != nil {
 		log.Panic(err)
 	}
 	privkey, err = keyrr.ReadPrivateKey(fi, config.KeyFile)
+	if err != nil {
+		log.Panic(err)
+	}
 	keyrr.Hdr.Ttl = config.KeyTTL
 
 	/* borrowed from 'q' utility in dns library examples */
