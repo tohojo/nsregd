@@ -44,7 +44,7 @@ var (
 type Config struct {
 	ListenAddr string
 	ListenPort int
-	Zones      []Zone
+	Zones      []*Zone
 }
 
 type Zone struct {
