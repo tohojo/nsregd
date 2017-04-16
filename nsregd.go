@@ -375,7 +375,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if *printf {
-		fmt.Printf("Received msg from %s: %s", remoteIP, r)
+		fmt.Printf("%s: Received msg from %s: %s", zone.Name, remoteIP, r)
 	}
 
 	m := new(dns.Msg)
