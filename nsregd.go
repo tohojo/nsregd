@@ -18,7 +18,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -32,11 +31,12 @@ import (
 	"os/signal"
 
 	"github.com/miekg/dns"
+	flag "github.com/spf13/pflag"
 )
 
 var (
 	printf   = flag.Bool("print", false, "print replies")
-	keep     = flag.Bool("keep", false, "do not flush entries from upstreams on shutdown")
+	keep     = flag.BoolP("keep", "k", false, "do not flush entries from upstreams on shutdown")
 	conffile = flag.String("conffile", "", "Config file")
 	config   Config
 )

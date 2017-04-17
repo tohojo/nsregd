@@ -20,7 +20,6 @@ package main
 import (
 	"bytes"
 	"crypto"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -36,6 +35,7 @@ import (
 	"os/signal"
 
 	"github.com/miekg/dns"
+	flag "github.com/spf13/pflag"
 	"github.com/vishvananda/netlink"
 )
 
@@ -47,9 +47,9 @@ const (
 var (
 	printf   = flag.Bool("print", false, "Print replies")
 	conffile = flag.String("conffile", "nsregc.conf", "Config file")
-	port     = flag.Int("port", 53, "Port number to use for initial query")
-	tcp      = flag.Bool("tcp", false, "Use TCP for initial SRV query")
-	keep     = flag.Bool("keep", false, "Do not remove records on shutdown")
+	port     = flag.IntP("port", "p", 53, "Port number to use for initial query")
+	tcp      = flag.BoolP("tcp", "t", false, "Use TCP for initial SRV query")
+	keep     = flag.BoolP("keep", "k", false, "Do not remove records on shutdown")
 	genkey   = flag.Bool("genkey", false, "Generate key")
 	config   Config
 
