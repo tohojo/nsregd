@@ -7,6 +7,10 @@ nsregd: nsregd.go keydb.go cache.go
 nsregc: nsregc.go cache.go
 	go build nsregc.go cache.go
 
+.PHONY: clean
+clean:
+	rm -f nsregc nsregd
+
 .PHONY: dep
 dep:
 	go get github.com/miekg/dns github.com/vishvananda/netlink
