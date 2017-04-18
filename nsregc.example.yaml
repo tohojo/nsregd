@@ -1,0 +1,65 @@
+# Unqualified name that the client will try to register
+name: example-client
+
+# Zones to register in (in addition to discovered zones; see below)
+#zones:
+#  - dynamic.example.org
+
+# Whether to try to auto-discover a zone to register with. This is done by
+# querying for PTR records in the record names defined for DNS-SD in RFC6763.
+# These records take the form r._dns-sd._udp.<domain> where <domain> is either
+# "local." or one of the reverse lookup domains derived from the IP addresses
+# found on the configured interfaces.
+#
+# If enabled, registration will be attempted in all zones discovered through
+# this mechanism *in addition* to the manually specified zones above (or on the
+# command line).
+#discover-zones: true
+
+# Interfaces to get addresses from. A separate record is created for each
+# address found on each of these interfaces (subject to filtering below). The
+# kernel-reported TTL for each address will be used if it is less than the
+# addr-ttl configured above.
+interfaces:
+  - eth0
+
+# Subnets that are excluded from registration. Any address found in one of these
+# subnets will be ignored when registering.
+exclude-subnets:
+  - 127.0.0.1/8
+  - ::1/128
+  - fd00::/8
+  - fe80::/10
+  - 10.0.0.0/8
+
+# Extra addresses to register in addition to those 
+#extra-addresses:
+#  - 172.12.12.12
+
+
+# Whether to keep records after shutting down (if disabled, a removal update
+# message will be sent on shutdown for any registered records).
+#keep-records: false
+
+# Public and private key files used to sign updates. Non-absolute paths are
+# resolved relative to the configuration file path.
+#key-file: nsregc.key
+#private-key-file: nsregc.private
+
+# Whether to generate the key if it doesn't exist
+#gen-key: true
+
+# Time to ask the server to cache our key
+#key-ttl: 720h
+
+# Maximum validity time of IP addresses.
+#addr-ttl: 1h
+
+# DNS server to use for discovery queries (uses system-configured resolver if
+# not set). An optional port name can be specified after a @ separator.
+#dns-server: 127.0.0.1@53
+# Whether to use TCP for the discovery DNS queries.
+#dns-tcp: false
+# Timeout for all DNS queries (both discovery and registration).
+#dns-timeout: 10s
+

@@ -82,20 +82,16 @@ To run the `nsregd` daemon:
    hostname and port that `nsregd` is listening on.
 
 To run the `nsregc` client:
-1. Edit `nsregc.conf.example` to set the name the client should try to
-   claim, the interfaces to get IP addresses from, and the files
-   containing the public and private keys used for signing.
-2. Either generate a key pair using `dnssec-keygen` (any algorithm
-   suitable for SIG(0) signing will work), or run `nsregc` with the
-   `-genkey` parameter.
-3. Run `nsregc` with the zone(s) you wish to register with as command
+1. Copy `nsregc.example.yaml` to ~/.nsregc/nsregc.yaml and edit it to
+   set the name the client should try to claim and the interface(s) to
+   get IP addresses from.
+2. Run `nsregc` with the zone(s) you wish to register with as command
    line parameters.
 
-To make `nsregc` use a specific name server to do the initial SRV
-lookup, pass a server hostname prefixed with a `@` and optionally set
-the `-port` and `-tcp` flags. For testing, it is possible to point
-`nsregc` directly at `nsregd` for the initial query (since `nsregd` will
-reply with its own address to any SRV queries).
+For testing, it is possible to point `nsregc` directly at `nsregd` for
+the initial query (using the --dns-server option and setting --dns-tcp),
+since `nsregd` will reply with its own address to any
+SRV queries.
 
 ## Limitations
 

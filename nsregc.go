@@ -25,17 +25,18 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"crypto/ecdsa"
 	"encoding/base64"
-	"encoding/json"
-	"io/ioutil"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/miekg/dns"
-	flag "github.com/spf13/pflag"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"github.com/vishvananda/netlink"
 )
 
@@ -45,28 +46,24 @@ const (
 )
 
 var (
-	printf   = flag.Bool("print", false, "Print replies")
-	conffile = flag.String("conffile", "nsregc.conf", "Config file")
-	port     = flag.IntP("port", "p", 53, "Port number to use for initial query")
-	tcp      = flag.BoolP("tcp", "t", false, "Use TCP for initial SRV query")
-	keep     = flag.BoolP("keep", "k", false, "Do not remove records on shutdown")
-	genkey   = flag.Bool("genkey", false, "Generate key")
-	config   Config
+	printf *bool
+	config Config
 
 	keyrr   *dns.KEY
 	privkey crypto.PrivateKey
 )
 
 type Config struct {
-	Name           string
-	KeyFile        string
-	PrivateKeyFile string
-	KeyTTL         uint32
-	Interfaces     []string
-	ExcludeNets    []string
-	MaxTTL         uint32
-	Timeout        string
+	Name           string        `mapstructure:"name"`
+	Zones          []string      `mapstructure:"zones"`
+	KeyFile        string        `mapstructure:"key-file"`
+	PrivateKeyFile string        `mapstructure:"private-key-file"`
+	KeyTTL         time.Duration `mapstructure:"key-ttl"`
+	AddrTTL        time.Duration `mapstructure:"addr-ttl"`
+	Timeout        time.Duration `mapstructure:"dns-timeout"`
+	Interfaces     []string      `mapstructure:"interfaces"`
 	excludedNets   []*net.IPNet
+	extraAddrs     []net.IP
 }
 
 type Server struct {
@@ -130,7 +127,7 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 	if tcp {
 		c.Net = "tcp"
 	}
-	c.Timeout, _ = time.ParseDuration(config.Timeout)
+	c.Timeout = config.Timeout
 	m := new(dns.Msg)
 	m.SetQuestion(srvname+"."+zone, dns.TypeSRV)
 	m.SetEdns0(4096, true)
@@ -145,7 +142,7 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 				Hostname: srv.Target + ":" + strconv.Itoa(int(srv.Port)),
 				nldone:   make(chan struct{})}
 			serv.cache.ExpireCallback = serv.Refresh
-			serv.cache.MaxTTL = config.MaxTTL
+			serv.cache.MaxTTL = uint32(config.AddrTTL.Seconds())
 			serv.cache.Init()
 			return serv, true
 		}
@@ -205,8 +202,8 @@ func getAddrs(ifname string) ([]Addr, error) {
 }
 
 func getTTL(ttl uint32) uint32 {
-	if ttl == 0 || ttl > config.MaxTTL {
-		return config.MaxTTL
+	if ttl == 0 || ttl > uint32(config.AddrTTL.Seconds()) {
+		return uint32(config.AddrTTL.Seconds())
 	}
 	return ttl
 }
@@ -304,7 +301,7 @@ func getMessage(m *dns.Msg) string {
 func (s *Server) send(m *dns.Msg) bool {
 	c := new(dns.Client)
 	c.Net = "tcp"
-	c.Timeout, _ = time.ParseDuration(config.Timeout)
+	c.Timeout = config.Timeout
 
 	log.Printf("Sending update with %d addresses for name %s",
 		len(m.Ns), s.Name)
@@ -409,17 +406,6 @@ func (s *Server) Stop() {
 }
 
 func GenerateKey() {
-	if _, err := os.Stat(config.KeyFile); err == nil {
-		fmt.Printf("Keyfile %s already exists. Not generating.\n",
-			config.KeyFile)
-		return
-	}
-	if _, err := os.Stat(config.PrivateKeyFile); err == nil {
-		fmt.Printf("PrivateKeyfile %s already exists. Not generating.\n",
-			config.PrivateKeyFile)
-		return
-	}
-
 	keyrr := &dns.KEY{dns.DNSKEY{
 		Hdr:       dns.RR_Header{Name: dns.Fqdn(config.Name), Rrtype: dns.TypeKEY, Class: dns.ClassINET},
 		Flags:     256,
@@ -456,46 +442,26 @@ func GenerateKey() {
 	fmt.Fprintf(fi, "Algorithm: %d (%s)\n",
 		keyrr.Algorithm, dns.AlgorithmToString[keyrr.Algorithm])
 	fmt.Fprintf(fi, "PrivateKey: %s\n", base64.StdEncoding.EncodeToString(pk.D.Bytes()))
+
+	// These are not actually used, but dnssec-keygen writes them, so keep
+	// them for compatibility
 	fmt.Fprintf(fi, "Created: %s\n", time)
 	fmt.Fprintf(fi, "Publish: %s\n", time)
 	fmt.Fprintf(fi, "Activate: %s\n", time)
 	fi.Close()
 
-	fmt.Printf("Key generation successful.\n")
+	log.Printf("Key generation successful.\n")
 }
 
-func main() {
-	var (
-		zones []string
-	)
+func readKeyFile() {
+	if _, err := os.Stat(config.KeyFile); err != nil {
+		if _, err := os.Stat(config.PrivateKeyFile); err != nil {
+			if viper.GetBool("gen-key") {
+				log.Printf("Generating new key file.")
+				GenerateKey()
+			}
 
-	flag.Usage = func() {
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	data, err := ioutil.ReadFile(*conffile)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-	err = json.Unmarshal(data, &config)
-	if err != nil {
-		log.Print(err.Error())
-		return
-	}
-
-	for _, n := range config.ExcludeNets {
-		_, net, err := net.ParseCIDR(n)
-		if err != nil {
-			log.Panic(err)
 		}
-		config.excludedNets = append(config.excludedNets, net)
-	}
-
-	if *genkey {
-		GenerateKey()
-		return
 	}
 
 	fi, err := os.Open(config.KeyFile)
@@ -525,27 +491,150 @@ func main() {
 	if err != nil {
 		log.Panic(err)
 	}
-	keyrr.Hdr.Ttl = config.KeyTTL
+	keyrr.Hdr.Ttl = uint32(config.KeyTTL.Seconds())
+}
 
-	/* borrowed from 'q' utility in dns library examples */
-	var nameserver string
-	for _, arg := range flag.Args() {
-		// If it starts with @ it is a nameserver
-		if arg[0] == '@' {
-			nameserver = arg
-			continue
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
 		}
-		zones = append(zones, dns.Fqdn(arg))
 	}
+	return false
+}
+
+func readConfig() {
+	var confdir string
+
+	flag := pflag.FlagSet{}
+	conffile := flag.StringP("conffile", "c", "", "Config file")
+	flag.StringP("name", "n", "", "Name to register")
+	flag.StringP("dns-server", "s", "", "DNS server to use for lookup queries (add port separated with @)")
+	flag.BoolP("dns-tcp", "t", false, "Use TCP when communicating with server")
+	flag.BoolP("keep-records", "k", false, "Do not remove records on shutdown")
+	flag.Bool("debug", false, "Print more debug information")
+	printf = flag.Bool("print", false, "Print replies (for debugging)")
+
+	viper.SetDefault("debug", false)
+	viper.SetDefault("discover-zones", true)
+	viper.SetDefault("keep-records", false)
+	viper.SetDefault("gen-key", true)
+	viper.SetDefault("key-ttl", 720*time.Hour)
+	viper.SetDefault("addr-ttl", 1*time.Hour)
+	viper.SetDefault("dns-timeout", 10*time.Second)
+	viper.SetDefault("key-file", "nsregc.key")
+	viper.SetDefault("private-key-file", "nsregc.private")
+
+	viper.BindPFlags(&flag)
+
+	flag.Usage = func() {
+		fmt.Printf("Usage: %s [options] [zone name] ... [zone name]\n", os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(0)
+	}
+	flag.Parse(os.Args[1:])
+
+	if len(*conffile) > 0 {
+		ext := filepath.Ext(*conffile)
+		if len(ext) == 0 || !stringInSlice(ext[1:], viper.SupportedExts) {
+			log.Panic(fmt.Sprintf("Unknown configuration format: %s", *conffile))
+		}
+		viper.SetConfigType(ext[1:])
+
+		fi, err := os.Open(*conffile)
+		if err != nil {
+			log.Panic(fmt.Errorf("Unable to open config file %s: %s \n",
+				*conffile, err))
+		}
+		defer fi.Close()
+
+		err = viper.ReadConfig(fi)
+		if err != nil {
+			log.Panic(fmt.Errorf("Fatal error reading config file: %s \n", err))
+		}
+		confdir = filepath.Dir(*conffile)
+	} else {
+		viper.SetConfigName("nsregc")
+		viper.AddConfigPath("/etc/nsregc")
+		viper.AddConfigPath("$HOME/.nsregc")
+		err := viper.ReadInConfig()
+		switch err.(type) {
+		case viper.ConfigFileNotFoundError:
+		case nil:
+			confdir = filepath.Dir(viper.ConfigFileUsed())
+		default:
+			log.Panic(fmt.Errorf("Fatal error reading config file: %s \n", err))
+		}
+	}
+
+	if len(viper.GetString("name")) == 0 {
+		log.Panic("Must set name")
+	}
+
+	viper.Debug()
+	err := viper.Unmarshal(&config)
+	if err != nil {
+		log.Panic(fmt.Errorf("Fatal error parsing config file: %s \n", err))
+	}
+
+	if !filepath.IsAbs(config.KeyFile) {
+		config.KeyFile = filepath.Join(confdir, config.KeyFile)
+	}
+	if !filepath.IsAbs(config.PrivateKeyFile) {
+		config.PrivateKeyFile = filepath.Join(confdir, config.PrivateKeyFile)
+	}
+	fmt.Printf("%s\n", config)
+
+	for _, z := range flag.Args() {
+		config.Zones = append(config.Zones, z)
+	}
+
+	if viper.IsSet("exclude-subnets") {
+		for _, s := range viper.GetStringSlice("exclude-subnets") {
+			_, net, err := net.ParseCIDR(s)
+			if err != nil {
+				log.Panic(err)
+			}
+			config.excludedNets = append(config.excludedNets, net)
+		}
+	}
+
+	if viper.IsSet("extra-addresses") {
+		for _, a := range viper.GetStringSlice("extra-addresses") {
+			ip := net.ParseIP(a)
+			if ip == nil {
+				log.Panic(fmt.Sprintf("Unable to parse IP: %s", a))
+			}
+			config.extraAddrs = append(config.extraAddrs, ip)
+		}
+	}
+}
+
+func getNameserver() string {
+	var nameserver, port string
+
+	parts := strings.SplitN(viper.GetString("dns-server"), "@", 2)
+	nameserver = parts[0]
+
+	if len(parts) > 1 && len(parts[1]) > 0 {
+		if _, err := strconv.Atoi(parts[1]); err != nil {
+			panic(fmt.Sprintf("Invalid DNS server: %s\n",
+				viper.GetString("dns-server")))
+		}
+		port = parts[1]
+	}
+
 	if len(nameserver) == 0 {
 		conf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		nameserver = "@" + conf.Servers[0]
+		return conf.Servers[0]
+	} else if len(port) == 0 {
+		return nameserver
 	}
-	nameserver = string([]byte(nameserver)[1:]) // chop off @
+
 	// if the nameserver is from /etc/resolv.conf the [ and ] are already
 	// added, thereby breaking net.ParseIP. Check for this and don't
 	// fully qualify such a name
@@ -553,17 +642,40 @@ func main() {
 		nameserver = nameserver[1 : len(nameserver)-1]
 	}
 	if i := net.ParseIP(nameserver); i != nil {
-		nameserver = net.JoinHostPort(nameserver, strconv.Itoa(*port))
+		nameserver = net.JoinHostPort(nameserver, port)
 	} else {
-		nameserver = dns.Fqdn(nameserver) + ":" + strconv.Itoa(*port)
+		nameserver = dns.Fqdn(nameserver) + ":" + port
 	}
+
+	return nameserver
+}
+
+func discoverZones(nameserver string) {
+}
+
+func main() {
+
+	defer func() {
+		if !viper.GetBool("debug") {
+			recover() // suppress stack traces
+		}
+	}()
+
+	readConfig()
+	readKeyFile()
+
+	nameserver := getNameserver()
 
 	log.Printf("Using nameserver %s", nameserver)
 
+	if viper.GetBool("discover-zones") {
+		discoverZones(nameserver)
+	}
+
 	servers := 0
-	exit := make(chan bool, len(zones))
-	for _, zone := range zones {
-		server, ok := getServer(zone, nameserver, *tcp)
+	exit := make(chan bool, len(config.Zones))
+	for _, zone := range config.Zones {
+		server, ok := getServer(zone, nameserver, viper.GetBool("dns-tcp"))
 		if !ok {
 			log.Printf("No nsregd server found for zone %s", zone)
 		} else {
@@ -572,7 +684,7 @@ func main() {
 			server.finished = exit
 			defer func() {
 				server.closing = true
-				server.cache.Close(!*keep)
+				server.cache.Close(!viper.GetBool("keep-records"))
 			}()
 			go server.run()
 		}
