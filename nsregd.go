@@ -151,7 +151,7 @@ func (nsup *NSUpstream) Init() {
 }
 
 func (zone *Zone) validName(name string) bool {
-	if dns.CompareDomainName(name, zone.Name) != dns.CountLabel(zone.Name) {
+	if !dns.IsSubDomain(zone.Name, name) {
 		return false
 	}
 	if dns.CountLabel(name)-dns.CountLabel(zone.Name) != 1 {
@@ -418,7 +418,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		switch rrtype {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := getIP(rr)
-			t := dns.TypeToString[rrtype]
+			t := dns.String(rrtype)
 			if !zone.AllowAnyNet && !zone.isIPAllowed(ip) {
 				log.Printf("Skipping %s record for %s outside allowed ranges from %s.",
 					t, ip, remoteIP)
