@@ -13,4 +13,4 @@ clean:
 
 .PHONY: dep
 dep:
-	go get github.com/miekg/dns github.com/vishvananda/netlink
+	go get github.com/miekg/dns github.com/vishvananda/netlink github.com/spf13/pflag github.com/spf13/viper
