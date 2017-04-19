@@ -62,8 +62,8 @@ type Config struct {
 	AddrTTL        time.Duration `mapstructure:"addr-ttl"`
 	Timeout        time.Duration `mapstructure:"dns-timeout"`
 	Interfaces     []string      `mapstructure:"interfaces"`
-	excludedNets   []*net.IPNet
-	extraAddrs     []net.IP
+	ExcludedNets   []*net.IPNet
+	ExtraAddrs     []net.IP
 }
 
 type Server struct {
@@ -152,7 +152,7 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 
 func excludeIP(ip net.IP) bool {
 
-	for _, net := range config.excludedNets {
+	for _, net := range config.ExcludedNets {
 		if net.Contains(ip) {
 			return true
 		}
@@ -508,11 +508,24 @@ func readConfig() {
 
 	flag := pflag.FlagSet{}
 	conffile := flag.StringP("conffile", "c", "", "Config file")
+
 	flag.StringP("name", "n", "", "Name to register")
-	flag.StringP("dns-server", "s", "", "DNS server to use for lookup queries (add port separated with @)")
-	flag.BoolP("dns-tcp", "t", false, "Use TCP when communicating with server")
-	flag.BoolP("keep-records", "k", false, "Do not remove records on shutdown")
+	viper.BindPFlag("name", flag.Lookup("name"))
+
+	flag.StringSliceP("interface", "i", nil, "Interface to get addresses from")
+	viper.BindPFlag("interfaces", flag.Lookup("interface"))
+
+	flag.StringP("server", "s", "", "DNS server to use for lookup queries (add port separated with @)")
+	viper.BindPFlag("dns-server", flag.Lookup("server"))
+
+	flag.BoolP("tcp", "t", false, "Use TCP when communicating with server")
+	viper.BindPFlag("dns-tcp", flag.Lookup("tcp"))
+
+	flag.BoolP("keep", "k", false, "Do not remove records on shutdown")
+	viper.BindPFlag("keep-records", flag.Lookup("keep"))
+
 	flag.Bool("debug", false, "Print more debug information")
+	viper.BindPFlag("debug", flag.Lookup("debug"))
 	printf = flag.Bool("print", false, "Print replies (for debugging)")
 
 	viper.SetDefault("debug", false)
@@ -525,7 +538,18 @@ func readConfig() {
 	viper.SetDefault("key-file", "nsregc.key")
 	viper.SetDefault("private-key-file", "nsregc.private")
 
-	viper.BindPFlags(&flag)
+	viper.SetDefault("exclude-subnets",
+		[]string{"127.0.0.1/8",
+			"::1/128",
+			"fe80::/10",
+			"fd00::/8",
+			"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16"})
+
+	if hn, err := os.Hostname(); err == nil {
+		viper.SetDefault("name", hn)
+	}
 
 	flag.Usage = func() {
 		fmt.Printf("Usage: %s [options] [zone name] ... [zone name]\n", os.Args[0])
@@ -560,6 +584,21 @@ func readConfig() {
 		err := viper.ReadInConfig()
 		switch err.(type) {
 		case viper.ConfigFileNotFoundError:
+			dir := filepath.Join(os.Getenv("HOME"), ".nsregc")
+			confdir, err := filepath.Abs(dir)
+			if err != nil {
+				confdir = filepath.Clean(dir)
+			}
+
+			st, err := os.Stat(confdir)
+			if err != nil {
+				if err = os.Mkdir(confdir, 0700); err != nil {
+					log.Panic(fmt.Errorf(
+						"Unable to create ~/.nsregc: %s \n", err))
+				}
+			} else if !st.IsDir() {
+				log.Panic("~/.nsregc already exists but is not a directory")
+			}
 		case nil:
 			confdir = filepath.Dir(viper.ConfigFileUsed())
 		default:
@@ -571,7 +610,6 @@ func readConfig() {
 		log.Panic("Must set name")
 	}
 
-	viper.Debug()
 	err := viper.Unmarshal(&config)
 	if err != nil {
 		log.Panic(fmt.Errorf("Fatal error parsing config file: %s \n", err))
@@ -583,31 +621,28 @@ func readConfig() {
 	if !filepath.IsAbs(config.PrivateKeyFile) {
 		config.PrivateKeyFile = filepath.Join(confdir, config.PrivateKeyFile)
 	}
-	fmt.Printf("%s\n", config)
 
 	for _, z := range flag.Args() {
 		config.Zones = append(config.Zones, z)
 	}
 
-	if viper.IsSet("exclude-subnets") {
-		for _, s := range viper.GetStringSlice("exclude-subnets") {
-			_, net, err := net.ParseCIDR(s)
-			if err != nil {
-				log.Panic(err)
-			}
-			config.excludedNets = append(config.excludedNets, net)
+	for _, s := range viper.GetStringSlice("exclude-subnets") {
+		_, net, err := net.ParseCIDR(s)
+		if err != nil {
+			log.Panic(err)
 		}
+		config.ExcludedNets = append(config.ExcludedNets, net)
 	}
 
-	if viper.IsSet("extra-addresses") {
-		for _, a := range viper.GetStringSlice("extra-addresses") {
-			ip := net.ParseIP(a)
-			if ip == nil {
-				log.Panic(fmt.Sprintf("Unable to parse IP: %s", a))
-			}
-			config.extraAddrs = append(config.extraAddrs, ip)
+	for _, a := range viper.GetStringSlice("extra-addresses") {
+		ip := net.ParseIP(a)
+		if ip == nil {
+			log.Panic(fmt.Sprintf("Unable to parse IP: %s", a))
 		}
+		config.ExtraAddrs = append(config.ExtraAddrs, ip)
 	}
+	//viper.Debug()
+	//fmt.Printf("%s\n", config)
 }
 
 func getNameserver() string {

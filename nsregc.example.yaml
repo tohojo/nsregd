@@ -1,5 +1,6 @@
-# Unqualified name that the client will try to register
-name: example-client
+# Unqualified name that the client will try to register. Defaults to the system
+# hostname if unset.
+#name: example-client
 
 # Zones to register in (in addition to discovered zones; see below)
 #zones:
@@ -20,17 +21,22 @@ name: example-client
 # address found on each of these interfaces (subject to filtering below). The
 # kernel-reported TTL for each address will be used if it is less than the
 # addr-ttl configured above.
-interfaces:
-  - eth0
+#
+# If unset, all addresses found on the system will be used.
+#interfaces:
+#  - eth0
 
 # Subnets that are excluded from registration. Any address found in one of these
-# subnets will be ignored when registering.
-exclude-subnets:
-  - 127.0.0.1/8
-  - ::1/128
-  - fd00::/8
-  - fe80::/10
-  - 10.0.0.0/8
+# subnets will be ignored when registering. If unset, will default to excluding
+# localhost, link-local and RFC1918 private addresses.
+#exclude-subnets:
+#  - 127.0.0.1/8
+#  - ::1/128
+#  - fe80::/10
+#  - fd00::/8
+#  - 10.0.0.0/8
+#  - 172.16.0.0/12
+#  - 192.168.0.0/16
 
 # Extra addresses to register in addition to those 
 #extra-addresses:
