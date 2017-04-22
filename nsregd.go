@@ -418,7 +418,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		switch rrtype {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := getIP(rr)
-			t := dns.String(rrtype)
+			t := dns.Type(rrtype).String()
 			if !zone.AllowAnyNet && !zone.isIPAllowed(ip) {
 				log.Printf("Skipping %s record for %s outside allowed ranges from %s.",
 					t, ip, remoteIP)
