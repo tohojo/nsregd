@@ -271,7 +271,7 @@ func (s *Server) run() {
 
 	rr := make([]dns.RR, len(addrs))
 	for i, a := range addrs {
-		log.Printf("Found address: %s", a.IP.IP)
+		log.Printf("Registering address: %s", a.IP.IP)
 		rr[i] = a.toRR(s.Name)
 	}
 	m.Insert(rr)
@@ -333,11 +333,11 @@ func (s *Server) run() {
 
 func getMessage(m *dns.Msg) string {
 	if m == nil || len(m.Extra) == 0 || m.Extra[0].Header().Rrtype != dns.TypeTXT {
-		return ""
+		return "(unknown)"
 	}
 	txt := m.Extra[0].(*dns.TXT)
 	if len(txt.Txt) == 0 {
-		return ""
+		return "(unknown)"
 	}
 	return txt.Txt[0]
 }
