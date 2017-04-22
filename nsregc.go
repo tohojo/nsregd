@@ -41,7 +41,7 @@ import (
 )
 
 const (
-	srvname         = "_nsreg._tcp"
+	srv_prefix      = "_nsreg._tcp"
 	skip_addr_flags = syscall.IFA_F_TEMPORARY | syscall.IFA_F_DEPRECATED
 )
 
@@ -51,6 +51,8 @@ var (
 
 	keyrr   *dns.KEY
 	privkey crypto.PrivateKey
+
+	discovery_domains = [...]string{"local.", "home.arpa."}
 )
 
 type Config struct {
@@ -62,8 +64,8 @@ type Config struct {
 	AddrTTL        time.Duration `mapstructure:"addr-ttl"`
 	Timeout        time.Duration `mapstructure:"dns-timeout"`
 	Interfaces     []string      `mapstructure:"interfaces"`
-	ExcludedNets   []*net.IPNet
-	ExtraAddrs     []net.IP
+	excludedNets   []*net.IPNet
+	extraAddrs     []net.IP
 }
 
 type Server struct {
@@ -113,7 +115,7 @@ func sign(m *dns.Msg, name string) *dns.Msg {
 	mb, err := sigrr.Sign(privkey.(crypto.Signer), m)
 
 	if err != nil {
-		fmt.Println("Unable to sign:" + err.Error())
+		log.Printf("Unable to sign: %s", err)
 	}
 
 	msg := new(dns.Msg)
@@ -129,16 +131,20 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 	}
 	c.Timeout = config.Timeout
 	m := new(dns.Msg)
-	m.SetQuestion(srvname+"."+zone, dns.TypeSRV)
+	m.SetQuestion(srv_prefix+"."+zone, dns.TypeSRV)
 	m.SetEdns0(4096, true)
 	r, _, err := c.Exchange(m, server)
 	if err != nil {
+		log.Printf("Error while getting nsregd server name: %s", err)
 		return nil, false
+	}
+	if *printf {
+		fmt.Printf("%s\n", r)
 	}
 	for _, k := range r.Answer {
 		if srv, ok := k.(*dns.SRV); ok {
-			serv := &Server{Zone: dns.Fqdn(zone),
-				Name:     config.Name + "." + dns.Fqdn(zone),
+			serv := &Server{Zone: zone,
+				Name:     config.Name + "." + zone,
 				Hostname: srv.Target + ":" + strconv.Itoa(int(srv.Port)),
 				nldone:   make(chan struct{})}
 			serv.cache.ExpireCallback = serv.Refresh
@@ -152,7 +158,7 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 
 func excludeIP(ip net.IP) bool {
 
-	for _, net := range config.ExcludedNets {
+	for _, net := range config.excludedNets {
 		if net.Contains(ip) {
 			return true
 		}
@@ -235,6 +241,7 @@ func (s *Server) run() {
 		err := netlink.AddrSubscribe(nlchan, s.nldone)
 		if err != nil {
 			log.Printf("Unable to subscribe to netlink address updates: %s", err)
+			return
 		}
 
 		for upd := range nlchan {
@@ -537,6 +544,8 @@ func readConfig() {
 	viper.SetDefault("dns-timeout", 10*time.Second)
 	viper.SetDefault("key-file", "nsregc.key")
 	viper.SetDefault("private-key-file", "nsregc.private")
+	viper.SetDefault("interfaces", []string{})
+	viper.SetDefault("zones", []string{})
 
 	viper.SetDefault("exclude-subnets",
 		[]string{"127.0.0.1/8",
@@ -564,14 +573,14 @@ func readConfig() {
 
 		fi, err := os.Open(*conffile)
 		if err != nil {
-			log.Panic(fmt.Errorf("Unable to open config file %s: %s \n",
-				*conffile, err))
+			log.Panicf("Unable to open config file %s: %s \n",
+				*conffile, err)
 		}
 		defer fi.Close()
 
 		err = viper.ReadConfig(fi)
 		if err != nil {
-			log.Panic(fmt.Errorf("Fatal error reading config file: %s \n", err))
+			log.Panicf("Fatal error reading config file: %s \n", err)
 		}
 		confdir = filepath.Dir(*conffile)
 	} else {
@@ -581,6 +590,7 @@ func readConfig() {
 		err := viper.ReadInConfig()
 		switch err.(type) {
 		case viper.ConfigFileNotFoundError:
+			log.Println("No config file found. Using defaults.")
 			dir := filepath.Join(os.Getenv("HOME"), ".nsregc")
 			confdir, err := filepath.Abs(dir)
 			if err != nil {
@@ -590,16 +600,16 @@ func readConfig() {
 			st, err := os.Stat(confdir)
 			if err != nil {
 				if err = os.Mkdir(confdir, 0700); err != nil {
-					log.Panic(fmt.Errorf(
-						"Unable to create ~/.nsregc: %s \n", err))
+					log.Panicf("Unable to create ~/.nsregc: %s \n", err)
 				}
 			} else if !st.IsDir() {
 				log.Panic("~/.nsregc already exists but is not a directory")
 			}
 		case nil:
+			log.Printf("Loaded config file %s", viper.ConfigFileUsed())
 			confdir = filepath.Dir(viper.ConfigFileUsed())
 		default:
-			log.Panic(fmt.Errorf("Fatal error reading config file: %s \n", err))
+			log.Panicf("Fatal error reading config file: %s \n", err)
 		}
 	}
 
@@ -609,7 +619,7 @@ func readConfig() {
 
 	err := viper.Unmarshal(&config)
 	if err != nil {
-		log.Panic(fmt.Errorf("Fatal error parsing config file: %s \n", err))
+		log.Panicf("Fatal error parsing config file: %s \n", err)
 	}
 
 	if !filepath.IsAbs(config.KeyFile) {
@@ -623,20 +633,22 @@ func readConfig() {
 		config.Zones = append(config.Zones, z)
 	}
 
+	config.excludedNets = make([]*net.IPNet, 0)
 	for _, s := range viper.GetStringSlice("exclude-subnets") {
 		_, net, err := net.ParseCIDR(s)
 		if err != nil {
 			log.Panic(err)
 		}
-		config.ExcludedNets = append(config.ExcludedNets, net)
+		config.excludedNets = append(config.excludedNets, net)
 	}
 
+	config.extraAddrs = make([]net.IP, 0)
 	for _, a := range viper.GetStringSlice("extra-addresses") {
 		ip := net.ParseIP(a)
 		if ip == nil {
 			log.Panic(fmt.Sprintf("Unable to parse IP: %s", a))
 		}
-		config.ExtraAddrs = append(config.ExtraAddrs, ip)
+		config.extraAddrs = append(config.extraAddrs, ip)
 	}
 	//viper.Debug()
 	//fmt.Printf("%s\n", config)
@@ -662,9 +674,11 @@ func getNameserver() string {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		return conf.Servers[0]
-	} else if len(port) == 0 {
-		return nameserver
+		nameserver = conf.Servers[0]
+	}
+
+	if len(port) == 0 {
+		port = "53"
 	}
 
 	// if the nameserver is from /etc/resolv.conf the [ and ] are already
@@ -707,7 +721,7 @@ func main() {
 	servers := 0
 	exit := make(chan bool, len(config.Zones))
 	for _, zone := range config.Zones {
-		server, ok := getServer(zone, nameserver, viper.GetBool("dns-tcp"))
+		server, ok := getServer(dns.Fqdn(zone), nameserver, viper.GetBool("dns-tcp"))
 		if !ok {
 			log.Printf("No nsregd server found for zone %s", zone)
 		} else {
