@@ -42,6 +42,7 @@ import (
 
 const (
 	srv_prefix      = "_nsreg._tcp"
+	discover_prefix = "r._dns-sd._udp"
 	skip_addr_flags = syscall.IFA_F_TEMPORARY | syscall.IFA_F_DEPRECATED
 )
 
@@ -52,7 +53,7 @@ var (
 	keyrr   *dns.KEY
 	privkey crypto.PrivateKey
 
-	discovery_domains = [...]string{"local.", "home.arpa."}
+	discover_domains = []string{"local.", "home.arpa."}
 )
 
 type Config struct {
@@ -65,7 +66,7 @@ type Config struct {
 	Timeout        time.Duration `mapstructure:"dns-timeout"`
 	Interfaces     []string      `mapstructure:"interfaces"`
 	excludedNets   []*net.IPNet
-	extraAddrs     []net.IP
+	extraAddrs     []*net.IPNet
 }
 
 type Server struct {
@@ -79,21 +80,21 @@ type Server struct {
 }
 
 type Addr struct {
-	IP  net.IP
+	IP  *net.IPNet
 	Ttl uint32
 }
 
 func (a *Addr) toRR(name string) dns.RR {
-	if v4 := a.IP.To4(); v4 != nil {
+	if v4 := a.IP.IP.To4(); v4 != nil {
 		return &dns.A{
 			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA,
 				Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
-			A: a.IP}
+			A: a.IP.IP}
 	} else {
 		return &dns.AAAA{
 			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA,
 				Class: dns.ClassINET, Ttl: getTTL(a.Ttl)},
-			AAAA: a.IP}
+			AAAA: a.IP.IP}
 	}
 }
 
@@ -201,13 +202,13 @@ func getAddrsBuiltin() ([]Addr, error) {
 	for _, addr := range addrs {
 		switch v := addr.(type) {
 		case *net.IPNet:
-			res = append(res, Addr{IP: v.IP})
+			res = append(res, Addr{IP: v})
 		case *net.IPAddr:
-			res = append(res, Addr{IP: v.IP})
+			res = append(res, Addr{IP: &net.IPNet{IP: v.IP}})
 		}
 	}
 	for _, addr := range config.extraAddrs {
-		res = append(res, Addr{IP: addr, Ttl: uint32(config.AddrTTL.Seconds())})
+		res = append(res, Addr{IP: addr})
 	}
 	return res, nil
 }
@@ -242,12 +243,12 @@ func getAddrs() ([]Addr, error) {
 	res := make([]Addr, 0, len(addrs)+len(config.extraAddrs))
 	for _, addr := range addrs {
 		if addr.Flags&skip_addr_flags == 0 && !excludeIP(addr.IPNet.IP) {
-			res = append(res, Addr{IP: addr.IPNet.IP,
+			res = append(res, Addr{IP: addr.IPNet,
 				Ttl: uint32(addr.ValidLft)})
 		}
 	}
 	for _, addr := range config.extraAddrs {
-		res = append(res, Addr{IP: addr, Ttl: uint32(config.AddrTTL.Seconds())})
+		res = append(res, Addr{IP: addr})
 	}
 	return res, nil
 }
@@ -270,7 +271,7 @@ func (s *Server) run() {
 
 	rr := make([]dns.RR, len(addrs))
 	for i, a := range addrs {
-		log.Printf("Found address: %s", a.IP)
+		log.Printf("Found address: %s", a.IP.IP)
 		rr[i] = a.toRR(s.Name)
 	}
 	m.Insert(rr)
@@ -300,7 +301,7 @@ func (s *Server) run() {
 				continue
 			}
 
-			a := Addr{IP: upd.LinkAddress.IP, Ttl: uint32(upd.ValidLft)}
+			a := Addr{IP: &upd.LinkAddress, Ttl: uint32(upd.ValidLft)}
 			rr := a.toRR(s.Name)
 			if upd.NewAddr {
 				if s.cache.Check(rr) {
@@ -429,7 +430,7 @@ func (s *Server) Refresh(rr []dns.RR) bool {
 			case dns.TypeAAAA:
 				ip = r.(*dns.AAAA).AAAA
 			}
-			if bytes.Compare(ip, a.IP) == 0 {
+			if bytes.Compare(ip, a.IP.IP) == 0 {
 				log.Printf("Refreshing record for IP %s", ip)
 				r.Header().Ttl = getTTL(a.Ttl)
 				m.Insert([]dns.RR{r})
@@ -678,13 +679,17 @@ func readConfig() {
 		config.excludedNets = append(config.excludedNets, net)
 	}
 
-	config.extraAddrs = make([]net.IP, 0)
+	config.extraAddrs = make([]*net.IPNet, 0)
 	for _, a := range viper.GetStringSlice("extra-addresses") {
 		ip := net.ParseIP(a)
 		if ip == nil {
-			log.Panic(fmt.Sprintf("Unable to parse IP: %s", a))
+			log.Panicf("Unable to parse IP: %s", a)
 		}
-		config.extraAddrs = append(config.extraAddrs, ip)
+		config.extraAddrs = append(config.extraAddrs, &net.IPNet{IP: ip})
+	}
+
+	for i := range config.Zones {
+		config.Zones[i] = dns.Fqdn(config.Zones[i])
 	}
 	//viper.Debug()
 	//fmt.Printf("%s\n", config)
@@ -733,6 +738,58 @@ func getNameserver() string {
 }
 
 func discoverZones(nameserver string) {
+	log.Println("Discovering zones to register with")
+
+	// From RFC6763: Discover available zones by looking for PTR records in
+	// .local as well as in each of the reverse zones for the network
+	// address of each available IP address.
+	//
+	// We add .home.arpa to support homenets as defined in the IETF homenet
+	// working group
+	if addrs, err := getAddrs(); err == nil {
+		for _, a := range addrs {
+			if a.IP.Mask != nil {
+				netaddr := a.IP.IP.Mask(a.IP.Mask)
+				if d, err := dns.ReverseAddr(netaddr.String()); err == nil {
+					discover_domains = append(discover_domains, d)
+				}
+			}
+		}
+	}
+	c := new(dns.Client)
+	if viper.GetBool("dns-tcp") {
+		c.Net = "tcp"
+	}
+	c.Timeout = config.Timeout
+	m := new(dns.Msg)
+	m.SetEdns0(4096, true)
+
+	for _, d := range discover_domains {
+		m.SetQuestion(dns.Fqdn(discover_prefix+"."+d), dns.TypePTR)
+		r, _, err := c.Exchange(m, nameserver)
+		if err != nil {
+			log.Printf("Error while discovering zones: %s", err)
+			continue
+		}
+
+		if *printf {
+			fmt.Println(r)
+		}
+
+		for _, k := range r.Answer {
+			ptr, ok := k.(*dns.PTR)
+			if ok && !stringInSlice(ptr.Ptr, config.Zones) {
+				log.Printf("Found new registration zone '%s' from %s",
+					ptr.Ptr, d)
+
+				// We just append everything to config.Zones;
+				// the code to lookup an nsregd server will
+				// figure out which zones are actually supported
+				config.Zones = append(config.Zones, ptr.Ptr)
+			}
+		}
+	}
+
 }
 
 func main() {

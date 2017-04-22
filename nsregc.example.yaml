@@ -9,8 +9,8 @@
 # Whether to try to auto-discover a zone to register with. This is done by
 # querying for PTR records in the record names defined for DNS-SD in RFC6763.
 # These records take the form r._dns-sd._udp.<domain> where <domain> is either
-# "local." or one of the reverse lookup domains derived from the IP addresses
-# found on the configured interfaces.
+# "local.", ".home.arpa" or one of the reverse lookup domains derived from the
+# IP addresses found on the configured interfaces.
 #
 # If enabled, registration will be attempted in all zones discovered through
 # this mechanism *in addition* to the manually specified zones above (or on the
