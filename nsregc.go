@@ -829,18 +829,24 @@ func main() {
 		}
 	}
 
-	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	int := make(chan os.Signal)
+	term := make(chan os.Signal)
+	signal.Notify(int, syscall.SIGINT)
+	signal.Notify(term, syscall.SIGTERM)
 
 	for servers > 0 {
 		select {
 		case <-exit:
 			servers -= 1
-		case s := <-sig:
-			log.Printf("Signal (%s) received, stopping", s)
-			return
+		case <-int:
+			log.Println("Interrupted.")
+			os.Exit(2)
+		case <-term:
+			log.Println("Received TERM, exiting.")
+			os.Exit(0)
 		}
 	}
 
-	log.Printf("No more active servers. Exiting.")
+	log.Printf("All registration attempts failed with non-transient errors.")
+	os.Exit(1)
 }
