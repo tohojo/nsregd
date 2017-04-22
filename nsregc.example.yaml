@@ -28,13 +28,15 @@
 
 # Subnets that are excluded from registration. Any address found in one of these
 # subnets will be ignored when registering. If unset, will default to excluding
-# localhost, link-local and RFC1918 private addresses.
+# localhost and link-local addresses.
 #exclude-subnets:
 #  - 127.0.0.1/8
 #  - ::1/128
 #  - fe80::/10
-#  - fd00::/8
 #  - 169.254.0.0/16
+
+# To exclude RFC1918 private addresses, add these:
+#  - fd00::/8
 #  - 10.0.0.0/8
 #  - 172.16.0.0/12
 #  - 192.168.0.0/16
