@@ -167,42 +167,87 @@ func excludeIP(ip net.IP) bool {
 	return false
 }
 
-func getAddrs(ifname string) ([]Addr, error) {
-	link, err := netlink.LinkByName(ifname)
-	if err != nil {
-		/* netlink failed - fall back to net library */
-		iface, err := net.InterfaceByName(ifname)
-		if err != nil {
-			log.Printf("Couldn't find interface %s: %s\n", link, err)
-			return nil, err
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			return nil, err
-		}
+func getAddrsBuiltin() ([]Addr, error) {
 
-		res := make([]Addr, 0, len(addrs))
-		for _, addr := range addrs {
-			switch v := addr.(type) {
-			case *net.IPNet:
-				res = append(res, Addr{IP: v.IP})
-			case *net.IPAddr:
-				res = append(res, Addr{IP: v.IP})
+	var (
+		addrs []net.Addr
+		err   error
+	)
+
+	if len(config.Interfaces) > 0 {
+		addrs = make([]net.Addr, 0)
+		for _, ifname := range config.Interfaces {
+			iface, err := net.InterfaceByName(ifname)
+			if err != nil {
+				log.Printf("Couldn't find interface %s: %s\n", ifname, err)
+				continue
+			}
+			if a, err := iface.Addrs(); err == nil {
+				addrs = append(addrs, a...)
+			} else {
+				log.Printf("Couldn't get addrs for interface %s: %s\n",
+					ifname, err)
+				continue
 			}
 		}
-		return res, nil
+	} else {
+		addrs, err = net.InterfaceAddrs()
 	}
-
-	addrs, err := netlink.AddrList(link, 0)
 	if err != nil {
 		return nil, err
 	}
+
 	res := make([]Addr, 0, len(addrs))
+	for _, addr := range addrs {
+		switch v := addr.(type) {
+		case *net.IPNet:
+			res = append(res, Addr{IP: v.IP})
+		case *net.IPAddr:
+			res = append(res, Addr{IP: v.IP})
+		}
+	}
+	for _, addr := range config.extraAddrs {
+		res = append(res, Addr{IP: addr, Ttl: uint32(config.AddrTTL.Seconds())})
+	}
+	return res, nil
+}
+
+func getAddrs() ([]Addr, error) {
+	var (
+		addrs []netlink.Addr
+		err   error
+	)
+	if len(config.Interfaces) > 0 {
+		addrs = make([]netlink.Addr, 0)
+		for _, ifname := range config.Interfaces {
+			var link netlink.Link
+			if link, err = netlink.LinkByName(ifname); err != nil {
+				log.Printf("Unable to find link %s: %s", ifname, err)
+				continue
+			}
+			if a, err := netlink.AddrList(link, 0); err == nil {
+				addrs = append(addrs, a...)
+			} else {
+				log.Printf("Unable to get addresses for link %s: %s",
+					ifname, err)
+				continue
+			}
+		}
+	} else {
+		addrs, err = netlink.AddrList(nil, 0)
+	}
+	if err != nil {
+		return getAddrsBuiltin()
+	}
+	res := make([]Addr, 0, len(addrs)+len(config.extraAddrs))
 	for _, addr := range addrs {
 		if addr.Flags&skip_addr_flags == 0 && !excludeIP(addr.IPNet.IP) {
 			res = append(res, Addr{IP: addr.IPNet.IP,
 				Ttl: uint32(addr.ValidLft)})
 		}
+	}
+	for _, addr := range config.extraAddrs {
+		res = append(res, Addr{IP: addr, Ttl: uint32(config.AddrTTL.Seconds())})
 	}
 	return res, nil
 }
@@ -218,20 +263,17 @@ func (s *Server) run() {
 	m := new(dns.Msg)
 	m.SetUpdate(s.Zone)
 
-	for _, ifname := range config.Interfaces {
-		addrs, err := getAddrs(ifname)
-		if err != nil {
-			log.Printf("Unable to get addresses for interface %s", ifname)
-			continue
-		}
-
-		rr := make([]dns.RR, len(addrs))
-		for i, a := range addrs {
-			rr[i] = a.toRR(s.Name)
-		}
-		m.Insert(rr)
-
+	addrs, err := getAddrs()
+	if err != nil {
+		return
 	}
+
+	rr := make([]dns.RR, len(addrs))
+	for i, a := range addrs {
+		log.Printf("Found address: %s", a.IP)
+		rr[i] = a.toRR(s.Name)
+	}
+	m.Insert(rr)
 
 	s.send(m)
 
@@ -249,14 +291,8 @@ func (s *Server) run() {
 			if err != nil {
 				continue
 			}
-			var ifname string
-			for _, name := range config.Interfaces {
-				if name == lnk.Attrs().Name {
-					ifname = name
-					break
-				}
-			}
-			if len(ifname) == 0 {
+			ifname := lnk.Attrs().Name
+			if len(config.Interfaces) > 0 && !stringInSlice(ifname, config.Interfaces) {
 				continue
 			}
 
@@ -378,28 +414,25 @@ func (s *Server) Refresh(rr []dns.RR) bool {
 	// When entries expire we check if the address still exists on one of
 	// the configured interfaces, and use the current expiry time for the
 	// new TTL
-	for _, ifname := range config.Interfaces {
-		addrs, err := getAddrs(ifname)
-		if err != nil {
-			log.Printf("Unable to get addresses for interface %s", ifname)
-			continue
-		}
+	addrs, err := getAddrs()
+	if err != nil {
+		return false
+	}
 
-		for _, a := range addrs {
+	for _, a := range addrs {
 
-			for _, r := range rr {
-				var ip net.IP
-				switch r.Header().Rrtype {
-				case dns.TypeA:
-					ip = r.(*dns.A).A
-				case dns.TypeAAAA:
-					ip = r.(*dns.AAAA).AAAA
-				}
-				if bytes.Compare(ip, a.IP) == 0 {
-					log.Printf("Refreshing record for IP %s", ip)
-					r.Header().Ttl = getTTL(a.Ttl)
-					m.Insert([]dns.RR{r})
-				}
+		for _, r := range rr {
+			var ip net.IP
+			switch r.Header().Rrtype {
+			case dns.TypeA:
+				ip = r.(*dns.A).A
+			case dns.TypeAAAA:
+				ip = r.(*dns.AAAA).AAAA
+			}
+			if bytes.Compare(ip, a.IP) == 0 {
+				log.Printf("Refreshing record for IP %s", ip)
+				r.Header().Ttl = getTTL(a.Ttl)
+				m.Insert([]dns.RR{r})
 			}
 		}
 	}
@@ -521,6 +554,9 @@ func readConfig() {
 
 	flag.StringSliceP("interface", "i", nil, "Interface to get addresses from")
 	viper.BindPFlag("interfaces", flag.Lookup("interface"))
+
+	flag.StringSliceP("address", "a", nil, "Extra address to register")
+	viper.BindPFlag("extra-addresses", flag.Lookup("address"))
 
 	flag.StringP("server", "s", "", "DNS server to use for lookup queries (add port separated with @)")
 	viper.BindPFlag("dns-server", flag.Lookup("server"))
