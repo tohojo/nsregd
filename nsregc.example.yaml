@@ -41,7 +41,7 @@
 #  - 172.16.0.0/12
 #  - 192.168.0.0/16
 
-# Extra addresses to register in addition to those 
+# Extra addresses to register in addition to those collected from the system
 #extra-addresses:
 #  - 172.12.12.12
 

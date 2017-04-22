@@ -54,6 +54,8 @@ var (
 	privkey crypto.PrivateKey
 
 	discover_domains = []string{"local.", "home.arpa."}
+
+	retry_time = uint32(1)
 )
 
 type Config struct {
@@ -119,6 +121,8 @@ func sign(m *dns.Msg, name string) *dns.Msg {
 		log.Printf("Unable to sign: %s", err)
 	}
 
+	// Sign works on the bytestring, so we have to unpack the message after
+	// it has been signed
 	msg := new(dns.Msg)
 	msg.Unpack(mb)
 
@@ -131,6 +135,8 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 		c.Net = "tcp"
 	}
 	c.Timeout = config.Timeout
+
+	// Try to find a SRV record for the zone
 	m := new(dns.Msg)
 	m.SetQuestion(srv_prefix+"."+zone, dns.TypeSRV)
 	m.SetEdns0(4096, true)
@@ -199,12 +205,16 @@ func getAddrsBuiltin() ([]Addr, error) {
 	}
 
 	res := make([]Addr, 0, len(addrs))
-	for _, addr := range addrs {
-		switch v := addr.(type) {
+	for _, a := range addrs {
+		var addr Addr
+		switch v := a.(type) {
 		case *net.IPNet:
-			res = append(res, Addr{IP: v})
+			addr = Addr{IP: v}
 		case *net.IPAddr:
-			res = append(res, Addr{IP: &net.IPNet{IP: v.IP}})
+			addr = Addr{IP: &net.IPNet{IP: v.IP}}
+		}
+		if !excludeIP(addr.IP.IP) {
+			res = append(res, addr)
 		}
 	}
 	for _, addr := range config.extraAddrs {
@@ -218,6 +228,9 @@ func getAddrs() ([]Addr, error) {
 		addrs []netlink.Addr
 		err   error
 	)
+
+	// If there are interfaces configured, only get the addresses from
+	// those.
 	if len(config.Interfaces) > 0 {
 		addrs = make([]netlink.Addr, 0)
 		for _, ifname := range config.Interfaces {
@@ -235,9 +248,11 @@ func getAddrs() ([]Addr, error) {
 			}
 		}
 	} else {
+		// No interfaces configured, get all addresses on the system
 		addrs, err = netlink.AddrList(nil, 0)
 	}
 	if err != nil {
+		// Netlink failed; fall back to Go's net module
 		return getAddrsBuiltin()
 	}
 	res := make([]Addr, 0, len(addrs)+len(config.extraAddrs))
@@ -261,23 +276,6 @@ func getTTL(ttl uint32) uint32 {
 }
 
 func (s *Server) run() {
-	m := new(dns.Msg)
-	m.SetUpdate(s.Zone)
-
-	addrs, err := getAddrs()
-	if err != nil {
-		return
-	}
-
-	rr := make([]dns.RR, len(addrs))
-	for i, a := range addrs {
-		log.Printf("Registering address: %s", a.IP.IP)
-		rr[i] = a.toRR(s.Name)
-	}
-	m.Insert(rr)
-
-	s.send(m)
-
 	go func() {
 		nlchan := make(chan netlink.AddrUpdate)
 
@@ -329,9 +327,32 @@ func (s *Server) run() {
 		}
 	}()
 
+	// Send an initial update with the addresses currently configured. The
+	// netlink subscription and the refresh logic will take care of the
+	// rest.
+	m := new(dns.Msg)
+	m.SetUpdate(s.Zone)
+
+	addrs, err := getAddrs()
+	if err != nil {
+		s.Stop()
+		return
+	}
+
+	rr := make([]dns.RR, len(addrs))
+	for i, a := range addrs {
+		log.Printf("Registering address: %s", a.IP.IP)
+		rr[i] = a.toRR(s.Name)
+	}
+	m.Insert(rr)
+
+	s.send(m)
+
 }
 
 func getMessage(m *dns.Msg) string {
+	// The server may return a human-readable error message as a TXT record
+	// in the Additional section. Try to find that.
 	if m == nil || len(m.Extra) == 0 || m.Extra[0].Header().Rrtype != dns.TypeTXT {
 		return "(unknown)"
 	}
@@ -357,6 +378,8 @@ func (s *Server) send(m *dns.Msg) bool {
 	}
 
 	if err != nil || r.Rcode == dns.RcodeServerFailure {
+		// Send errors and ServerFailure errors are transient, so retry
+		// again in a bit
 		if err != nil {
 			log.Printf("Network error while sending update: %s", err)
 		} else {
@@ -364,11 +387,13 @@ func (s *Server) send(m *dns.Msg) bool {
 		}
 
 		if !s.closing {
-			log.Printf("Queueing RRs for retry in %d seconds", 10)
+			log.Printf("Queueing RRs for retry in %d seconds", retry_time)
 			for _, rr := range m.Ns {
-				rr.Header().Ttl = 10
+				rr.Header().Ttl = retry_time
 				s.cache.Add(rr)
 			}
+			// Exponential backoff
+			retry_time <<= 1
 		}
 		return false
 	} else if r.Rcode != dns.RcodeSuccess {
@@ -386,6 +411,16 @@ func (s *Server) send(m *dns.Msg) bool {
 		log.Printf("Successfully registered %d addresses for name %s",
 			len(r.Answer), s.Name)
 
+		retry_time = 1
+
+		// This set may be different from the records we sent for
+		// registration since the server may be configured to drop some
+		// records, and may restrict the allowed TTL.
+		//
+		// If the server drops the records, there is no use retrying
+		// them again later, so keep and refresh the records that we
+		// actually registered. And use the server-provided TTL for
+		// deciding when to refresh.
 		for _, rr := range r.Answer {
 			switch rr.Header().Rrtype {
 			case dns.TypeA, dns.TypeAAAA:
@@ -517,6 +552,8 @@ func readKeyFile() {
 
 	switch rr.Header().Rrtype {
 	case dns.TypeDNSKEY:
+		// dnssec-keygen generates key records of type DNSKEY; convert
+		// those to KEY
 		keyrr = &dns.KEY{*rr.(*dns.DNSKEY)}
 		keyrr.Hdr.Rrtype = dns.TypeKEY
 	case dns.TypeKEY:
