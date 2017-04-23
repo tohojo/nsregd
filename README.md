@@ -78,7 +78,8 @@ To run the `nsregd` daemon:
    as  `dynamic.example.org`.
 2. Generate a TSIG secret and configure the authoritative DNS server for
    the parent zone (`example.org` in the example above) to allow updates
-   to the registration zone with this secret.
+   to the registration zone with this secret and HMAC-SHA256
+   authentication.
 3. Copy `nsregd.example.yaml` to `/etc/nsregd` and edit it to contain
    the chosen zone name and to point at the right upstream server and
    set the TSIG secret.
