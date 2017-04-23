@@ -240,7 +240,7 @@ func (zone *Zone) Init() error {
 	zone.Name = dns.Fqdn(zone.Name)
 
 	// zone.Name ends with .
-	dbfile := zone.Name + "keydb"
+	dbfile := filepath.Join(viper.GetString("data-dir"), zone.Name+"keydb")
 	kdb, err := NewKeyDb(dbfile, uint32(zone.MaxKeyTTL.Seconds()), zone.removeName)
 	if err != nil {
 		return err
