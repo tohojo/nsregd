@@ -1,0 +1,97 @@
+# Address and port to listen on
+listen-addr: localhost
+listen-port: 8053
+
+# Directory where key database files are stored
+data-dir: /var/lib/nsregd
+
+# Zone configs
+zones:
+  # Zone name. This is the FQDN that clients will register themselves as
+  # subdomains of. This is also the name that the _nsreg._tcp SRV record needs
+  # to be put under (somewhere the clients can find them).
+  dynamic.example.org:
+
+    # Maximum time we will keep a client's key cached since the last time we
+    # heard from that client. After this time, the key will be purged from the
+    # database, and the name will no longer be claimed by that client.
+    #
+    # A client may indicate a shorter TTL for its key, which the server will
+    # honour.
+    max-key-ttl: 4320h # 6 months
+
+    # Maximum time an address record will be kept in the upstream DNS before it
+    # is purged from the upstream servers. Clients need to refresh their records
+    # within this time interval to keep them alive.
+    #
+    # As above, a client can specify a shorter TTL for each address it registers.
+    max-addr-ttl: 1h
+
+    # A client that attempts to register a reserved name is refused.
+    reserved-names:
+      - localhost
+
+    # Clients are only allowed to claim a new name if they connect from one of
+    # these networks.
+    allowed-nets:
+      - 127.0.0.0/8
+      - ::1/128
+
+    # If set to true, clients can add address records for any addresses. If set
+    # to false, address records outside allowed-nets are dropped on registration.
+    allow-any-addr: true
+
+    # Upstreams are the authoritative name server(s) that nsregd will install
+    # records into on the clients' behalf. Several upstreams can be configured,
+    # and the daemon will install the records into all of them (subject to
+    # filtering, see below).
+    upstreams:
+      -
+        # The type of the upstream. Supported values:
+        #
+        #  nsupdate: An upstream that speaks the RFC2136 dynamic DNS update
+        #            protocol.
+        type: nsupdate
+
+        # Hostname and port to find the upstream server on, whether to speak TCP
+        # when talking to it, and the connection timeout.
+        hostname: ns.example.org
+        port: 53
+        tcp: true
+        timeout: 10s
+
+        # Zone to register in. This can be different than the zone the clients
+        # see, since the upstream server may have a different zone boundary.
+        #
+        # This can be unset if reverse-zone (see below) is set.
+        zone: example.org
+
+        # Zones to register reverse records in with this upstream. If set, any
+        # records that have a target IP matching one of these reverse zones will
+        # get a corresponding PTR record installed. (Not yet implemented)
+        reverse-zones:
+          - 42.10.in-addr.arpa
+
+        # TTL of records installed into the upstream zone. This is the TTL that
+        # is seen in the global DNS, and so it is a good idea to keep it fairly
+        # low; otherwise, updates by the clients are not seen because of caching.
+        #
+        # If a client supplies a *lower* TTL than this when registering an
+        # address, that is used instead.
+        record-ttl: 60s
+
+        # If set to true, records are not deleted from this upstream when nsregd
+        # shuts down.
+        keep-records: false
+
+        # The TSIG name and secret to use for authenticating updates sent to the
+        # upstream server.
+        tsig-name: nsregd.example.org.
+        tsig-secret: "wDRVYeYdtAzirOCfaAIieAFwQJ1WiNYZ3Ykr3R/T85M="
+
+        # Exclude records in these subnets. Can be used to, e.g., filter out
+        # private addresses from public DNS (but keep them in a private view
+        # configured as another upstream).
+        exclude-nets:
+          - 10.0.0.0/8
+          - fd00::/8

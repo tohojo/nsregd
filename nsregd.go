@@ -23,65 +23,57 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
-	"encoding/json"
-	"io/ioutil"
 	"os/signal"
+	"path/filepath"
 
 	"github.com/miekg/dns"
-	flag "github.com/spf13/pflag"
+	"github.com/mitchellh/mapstructure"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 var (
-	printf   = flag.Bool("print", false, "print replies")
-	keep     = flag.BoolP("keep", "k", false, "do not flush entries from upstreams on shutdown")
-	conffile = flag.String("conffile", "", "Config file")
-	config   Config
+	printf   *bool
+	conffile *string
+	Zones    map[string]*Zone
 )
 
-type Config struct {
-	ListenAddr string
-	ListenPort int
-	Zones      []*Zone
-}
-
 type Zone struct {
-	Name          string
-	Upstreams     UpstreamList
-	upstreams     []Upstream
-	ReservedNames []string
-	AllowedNets   []string
-	AllowAnyNet   bool
+	Name          string        `mapstructure:"name"`
+	MaxKeyTTL     time.Duration `mapstructure:"max-key-ttl"`
+	MaxAddrTTL    time.Duration `mapstructure:"max-addr-ttl"`
+	ReservedNames []string      `mapstructure:"reserved-names"`
+	AllowAnyAddr  bool          `mapstructure:"allow-any-addr"`
 	allowedNets   []*net.IPNet
-	KeyDbFile     string
-	MaxKeyTTL     uint32
-	MaxTTL        uint32
+	upstreams     []Upstream
 	keydb         *KeyDb
 	cache         *Cache
-}
-
-type UpstreamList struct {
-	NSUpdate []NSUpstream
+	lock          sync.RWMutex
 }
 
 type Upstream interface {
 	sendUpdate(records []dns.RR) bool
-	Init()
+	Init() error
 }
 
 type NSUpstream struct {
-	Type       string
-	Hostname   string
-	Port       uint16
-	Zone       string
-	TSigName   string
-	TSigSecret string
-	MaxTTL     uint32
-	TCP        bool
-	Timeout    string
-	client     *dns.Client
+	Hostname     string        `mapstructure:"hostname"`
+	Port         uint16        `mapstructure:"port"`
+	TCP          bool          `mapstructure:"tcp"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	Zone         string        `mapstructure:"zone"`
+	ReverseZones []string      `mapstructure:"reverse-zones"`
+	RecordTTL    time.Duration `mapstructure:"record-ttl"`
+	TSigName     string        `mapstructure:"tsig-name"`
+	TSigSecret   string        `mapstructure:"tsig-secret"`
+	KeepRecords  bool          `mapstructure:"keep-records"`
+	ExcludeNets  []string      `mapstructure:"exclude-nets"`
+	excludeNets  []*net.IPNet
+	client       *dns.Client
 }
 
 func setError(m *dns.Msg, name string, code int, msg string) {
@@ -103,8 +95,8 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 
 	for _, orig := range records {
 		rr := dns.Copy(orig)
-		if rr.Header().Ttl > nsup.MaxTTL {
-			rr.Header().Ttl = nsup.MaxTTL
+		if rr.Header().Ttl > uint32(nsup.RecordTTL.Seconds()) {
+			rr.Header().Ttl = uint32(nsup.RecordTTL.Seconds())
 		}
 		upd.Ns = append(upd.Ns, rr)
 	}
@@ -135,19 +127,90 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 	return true
 }
 
-func (nsup *NSUpstream) Init() {
+func (nsup *NSUpstream) Init() error {
+
+	if err := checkFields(nsup); err != nil {
+		return err
+	}
+
 	nsup.TSigName = dns.Fqdn(nsup.TSigName)
 	nsup.Zone = dns.Fqdn(nsup.Zone)
+
+	nsup.excludeNets = make([]*net.IPNet, 0, len(nsup.ExcludeNets))
+	for _, n := range nsup.ExcludeNets {
+		_, net, err := net.ParseCIDR(n)
+		if err != nil {
+			return err
+		}
+		nsup.excludeNets = append(nsup.excludeNets, net)
+	}
 
 	c := new(dns.Client)
 	if nsup.TCP {
 		c.Net = "tcp"
 	}
-	c.Timeout, _ = time.ParseDuration(nsup.Timeout)
+	c.Timeout = nsup.Timeout
 	c.TsigSecret = make(map[string]string)
 	c.TsigSecret[nsup.TSigName] = nsup.TSigSecret
 
 	nsup.client = c
+
+	return nil
+}
+
+func (zone *Zone) Init() error {
+	zone.lock.Lock()
+	defer zone.lock.Unlock()
+
+	zone.Name = dns.Fqdn(zone.Name)
+
+	// zone.Name ends with .
+	dbfile := zone.Name + "keydb"
+	kdb, err := NewKeyDb(dbfile, uint32(zone.MaxKeyTTL.Seconds()), zone.removeName)
+	if err != nil {
+		return err
+	}
+	zone.keydb = kdb
+
+	zone.cache = &Cache{ExpireCallback: zone.removeRRs,
+		MaxTTL: uint32(zone.MaxAddrTTL.Seconds())}
+	zone.cache.Init()
+
+	dns.HandleFunc(zone.Name, zone.handleRegd)
+
+	log.Printf("Configured zone %s", zone.Name)
+	return nil
+}
+
+func (zone *Zone) UpdateConfig(other *Zone) error {
+	zone.lock.Lock()
+	defer zone.lock.Unlock()
+
+	if zone.Name != other.Name {
+		return fmt.Errorf("Cannot update zone %s from other zone with name %s",
+			zone.Name, other.Name)
+	}
+
+	zone.keydb.Write()
+
+	zone.MaxKeyTTL = other.MaxKeyTTL
+	zone.MaxAddrTTL = other.MaxAddrTTL
+	zone.ReservedNames = other.ReservedNames
+	zone.AllowAnyAddr = other.AllowAnyAddr
+	zone.allowedNets = other.allowedNets
+	zone.upstreams = other.upstreams
+
+	log.Printf("Updated config for zone %s", zone.Name)
+	return nil
+}
+
+func (zone *Zone) Shutdown() {
+	zone.lock.Lock()
+	defer zone.lock.Unlock()
+
+	zone.keydb.Stop()
+	zone.cache.Close(true)
+	dns.HandleRemove(zone.Name)
 }
 
 func (zone *Zone) validName(name string) bool {
@@ -366,6 +429,9 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		records []dns.RR
 	)
 
+	zone.lock.RLock()
+	defer zone.lock.RUnlock()
+
 	var remoteIP net.IP
 	switch v := w.RemoteAddr().(type) {
 	case *net.TCPAddr:
@@ -386,8 +452,8 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		rr := &dns.SRV{
 			Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeSRV,
 				Class: dns.ClassINET, Ttl: 0},
-			Port:   uint16(config.ListenPort),
-			Target: dns.Fqdn(config.ListenAddr),
+			Port:   uint16(viper.GetInt("listen-port")),
+			Target: dns.Fqdn(viper.GetString("listen-addr")),
 		}
 		m.Answer = append(m.Answer, rr)
 		goto out
@@ -419,7 +485,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := getIP(rr)
 			t := dns.Type(rrtype).String()
-			if !zone.AllowAnyNet && !zone.isIPAllowed(ip) {
+			if !zone.AllowAnyAddr && !zone.isIPAllowed(ip) {
 				log.Printf("Skipping %s record for %s outside allowed ranges from %s.",
 					t, ip, remoteIP)
 				continue
@@ -484,57 +550,152 @@ func serve(server *dns.Server) {
 	}
 }
 
-func main() {
-	flag.Usage = func() {
-		flag.PrintDefaults()
-	}
-	flag.Parse()
+func configureZone(zonename string, conf *viper.Viper) {
+	var err error
 
-	data, err := ioutil.ReadFile(*conffile)
+	zonename = dns.Fqdn(zonename)
+
+	zone := new(Zone)
+
+	zone.Name = zonename
+	zone.ReservedNames = make([]string, 0)
+	zone.allowedNets = make([]*net.IPNet, 0)
+	zone.upstreams = make([]Upstream, 0)
+
+	if err = conf.Unmarshal(zone); err == nil {
+		err = checkFields(zone)
+	}
 	if err != nil {
-		log.Print(err)
+		log.Printf("Unable to parse zone config for zone %s: %s",
+			zonename, err)
 		return
 	}
-	err = json.Unmarshal(data, &config)
-	if err != nil {
-		log.Print(err.Error())
-		return
-	}
 
-	for _, zone := range config.Zones {
-		zone.Name = dns.Fqdn(zone.Name)
-
-		zone.upstreams = make([]Upstream, 0)
-		for _, upstream := range zone.Upstreams.NSUpdate {
-			upstream.Init()
-			zone.upstreams = append(zone.upstreams, &upstream)
-		}
-
-		kdb, err := NewKeyDb(zone.KeyDbFile, zone.MaxKeyTTL, zone.removeName)
+	for _, n := range conf.GetStringSlice("allowed-nets") {
+		_, net, err := net.ParseCIDR(n)
 		if err != nil {
+			log.Printf("Zone %s: Invalid CIDR in allowed-nets: %s",
+				zonename, n)
 			return
 		}
-		log.Printf("Configuring zone %s with db file %s", zone.Name, zone.KeyDbFile)
-		zone.keydb = kdb
-		defer kdb.Stop()
-
-		zone.cache = &Cache{ExpireCallback: zone.removeRRs,
-			MaxTTL: zone.MaxTTL}
-		zone.cache.Init()
-		defer zone.cache.Close(!*keep)
-
-		for _, n := range zone.AllowedNets {
-			_, net, err := net.ParseCIDR(n)
-			if err != nil {
-				log.Panic(err)
-			}
-			zone.allowedNets = append(zone.allowedNets, net)
-		}
-
-		dns.HandleFunc(zone.Name, zone.handleRegd)
+		zone.allowedNets = append(zone.allowedNets, net)
 	}
 
-	laddr := config.ListenAddr + ":" + strconv.Itoa(config.ListenPort)
+	upstreams := make([]map[string]interface{}, 0)
+	if err := conf.UnmarshalKey("upstreams", &upstreams); err != nil {
+		log.Printf("Zone %s: Unable to parse upstreams: %s", zonename, err)
+		return
+	}
+
+	for _, u := range upstreams {
+		var ups Upstream
+		switch u["type"] {
+		case "nsupdate":
+			ups = new(NSUpstream)
+		case nil:
+			log.Printf("Zone %s: Missing upstream type", zonename)
+			return
+		default:
+			log.Printf("Zone %s: Unknown upstream type '%s'", zonename, u["type"])
+			return
+		}
+
+		dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+			Metadata:         nil,
+			Result:           ups,
+			WeaklyTypedInput: true,
+			ZeroFields:       true,
+			DecodeHook:       mapstructure.StringToTimeDurationHookFunc(),
+		})
+		if err = dec.Decode(u); err == nil {
+			err = ups.Init()
+		}
+		if err != nil {
+			log.Printf("Zone %s: Error parsing upstream type: %s",
+				zonename, err)
+			return
+		}
+		zone.upstreams = append(zone.upstreams, ups)
+	}
+
+	if z, ok := Zones[zonename]; ok {
+		z.UpdateConfig(zone)
+	} else {
+		if err := zone.Init(); err == nil {
+			Zones[zonename] = zone
+		}
+	}
+}
+
+func initConfig() {
+	Zones = make(map[string]*Zone)
+
+	flag := pflag.FlagSet{}
+	conffile = flag.StringP("conffile", "c", "", "Config file")
+
+	flag.Bool("debug", false, "Print more debug information")
+	viper.BindPFlag("debug", flag.Lookup("debug"))
+
+	printf = flag.Bool("print", false, "Print replies (for debugging)")
+
+	viper.SetDefault("debug", false)
+	viper.SetDefault("listen-addr", "localhost")
+	viper.SetDefault("listen-port", 8053)
+	viper.SetDefault("data-dir", "/var/lib/nsregd")
+
+	flag.Parse(os.Args[1:])
+
+}
+
+func readConfig() {
+	if len(*conffile) > 0 {
+		ext := filepath.Ext(*conffile)
+		if len(ext) == 0 || !stringInSlice(ext[1:], viper.SupportedExts) {
+			log.Panic(fmt.Sprintf("Unknown configuration format: %s", *conffile))
+		}
+		viper.SetConfigType(ext[1:])
+
+		fi, err := os.Open(*conffile)
+		if err != nil {
+			log.Panicf("Unable to open config file %s: %s \n",
+				*conffile, err)
+		}
+		defer fi.Close()
+
+		err = viper.ReadConfig(fi)
+		if err != nil {
+			log.Panicf("Fatal error reading config file: %s \n", err)
+		}
+	} else {
+		viper.SetConfigName("nsregd")
+		viper.AddConfigPath("/etc/nsregd")
+		err := viper.ReadInConfig()
+		if err != nil {
+			log.Panicf("Fatal error reading config file: %s \n", err)
+		}
+		log.Printf("Loaded config file %s", viper.ConfigFileUsed())
+	}
+
+	zonemap := viper.GetStringMap("zones")
+	confzones := make([]string, 0, len(zonemap))
+	for zone, _ := range zonemap {
+		configureZone(zone, viper.Sub("zones."+zone))
+		confzones = append(confzones, dns.Fqdn(zone))
+	}
+	for n, z := range Zones {
+		if !stringInSlice(n, confzones) {
+			z.Shutdown()
+			delete(Zones, n)
+		}
+	}
+}
+
+func main() {
+
+	initConfig()
+	readConfig()
+
+	laddr := viper.GetString("listen-addr") + ":" + strconv.Itoa(viper.GetInt("listen-port"))
 	server4 := &dns.Server{Addr: laddr, Net: "tcp4"}
 	log.Printf("Starting server on %s (tcp4)", laddr)
 	go serve(server4)
@@ -544,10 +705,35 @@ func main() {
 	go serve(server6)
 
 	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	s := <-sig
-	fmt.Printf("Signal (%s) received, stopping\n", s)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	server4.Shutdown()
-	server6.Shutdown()
+	defer func() {
+		server4.Shutdown()
+		server6.Shutdown()
+
+		for _, z := range Zones {
+			z.Shutdown()
+		}
+
+		if !viper.GetBool("debug") {
+			recover() // suppress stack traces
+		}
+	}()
+
+	log.Printf("Started. Serving %d zones.", len(Zones))
+
+	for {
+		switch <-sig {
+		case syscall.SIGINT:
+			log.Println("Interrupted")
+			os.Exit(2)
+		case syscall.SIGTERM:
+			log.Println("Received TERM, shutting down")
+			os.Exit(0)
+		case syscall.SIGHUP:
+			log.Println("Received HUP, re-reading config")
+			readConfig()
+		}
+	}
+
 }

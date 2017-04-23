@@ -155,16 +155,26 @@ func NewKeyDb(filename string, maxttl uint32, callback func(name string) bool) (
 func (db *KeyDb) Stop() {
 	close(db.queue)
 
+	err := db.Write()
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (db *KeyDb) Write() error {
+
+	//fixme := error // needs concurrency fix
+
 	if db.keyfile != "" {
 		data, err := json.Marshal(db.keys)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		fn := fmt.Sprintf("%s.tmp", db.keyfile)
 		fp, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		_, err = fp.Write(data)
@@ -175,9 +185,12 @@ func (db *KeyDb) Stop() {
 		}
 
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
+		return nil
 	}
+
+	return nil
 }
 
 func (db *KeyDb) Add(key *Key, ttl uint32) bool {

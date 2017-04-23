@@ -17,6 +17,11 @@
 
 package main
 
+import (
+	"fmt"
+	"reflect"
+)
+
 // borrowed from github.com/spf13/viper/util.go
 func stringInSlice(a string, list []string) bool {
 	for _, b := range list {
@@ -25,4 +30,33 @@ func stringInSlice(a string, list []string) bool {
 		}
 	}
 	return false
+}
+
+// Checks for unset exported fields in a struct. Only checks simple (comparable)
+// field types that are not of type bool
+func checkFields(i interface{}) error {
+	val := reflect.Indirect(reflect.ValueOf(i))
+	typ := val.Type()
+	for i := 0; i < val.NumField(); i++ {
+		f := typ.Field(i)
+		v := val.Field(i)
+		t := v.Type()
+		if len(f.PkgPath) > 0 {
+			// Unexported struct field
+			continue
+		}
+		// A bool set to false would be considered unset
+		if t.Kind() == reflect.Bool {
+			continue
+		}
+		if t.Comparable() && reflect.Zero(t).Interface() == v.Interface() {
+			n := f.Tag.Get("mapstructure")
+			if len(n) == 0 {
+				n = f.Name
+			}
+			return fmt.Errorf("Required key '%s' is unset.", n)
+		}
+	}
+
+	return nil
 }
