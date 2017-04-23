@@ -90,6 +90,63 @@ func setError(m *dns.Msg, name string, code int, msg string) {
 		Txt: []string{msg}})
 }
 
+func (nsup *NSUpstream) checkReverse(records []dns.RR) {
+	for _, revzone := range nsup.ReverseZones {
+		revzone = dns.Fqdn(revzone)
+
+		upd := new(dns.Msg)
+		upd.SetUpdate(revzone)
+
+		for _, orig := range records {
+			rr := dns.Copy(orig)
+
+			var ip net.IP
+			switch rr.Header().Rrtype {
+			case dns.TypeA:
+				ip = rr.(*dns.A).A
+			case dns.TypeAAAA:
+				ip = rr.(*dns.AAAA).AAAA
+			}
+
+			rev, err := dns.ReverseAddr(ip.String())
+			if err == nil && dns.IsSubDomain(revzone, rev) {
+				newrr := &dns.PTR{
+					Hdr: dns.RR_Header{
+						Name:   rev,
+						Rrtype: dns.TypePTR,
+						Ttl:    rr.Header().Ttl,
+						Class:  rr.Header().Class},
+					Ptr: rr.Header().Name}
+				upd.Ns = append(upd.Ns, newrr)
+			}
+		}
+
+		if len(upd.Ns) == 0 {
+			continue
+		}
+		upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
+
+		hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
+
+		log.Printf("Sending nsupdate to %s with %d reverse names",
+			hostname, len(upd.Ns))
+
+		if *printf {
+			fmt.Printf("Update message: %s", upd)
+		}
+
+		r, _, err := nsup.client.Exchange(upd, hostname)
+		if err != nil {
+			log.Printf("Error updating upstream DNS: %s", err)
+		} else if r.Rcode != dns.RcodeSuccess {
+			log.Printf("Upstream DNS update failed with error code %s",
+				dns.RcodeToString[r.Rcode])
+		} else {
+			log.Printf("Upstream nsupdate of %s successful", hostname)
+		}
+	}
+}
+
 func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 	upd := new(dns.Msg)
 	upd.SetUpdate(nsup.Zone)
@@ -135,6 +192,7 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 		return false
 	} else {
 		log.Printf("Upstream nsupdate of %s successful", hostname)
+		nsup.checkReverse(upd.Ns)
 	}
 
 	return true

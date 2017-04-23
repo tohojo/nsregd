@@ -68,7 +68,7 @@ zones:
 
         # Zones to register reverse records in with this upstream. If set, any
         # records that have a target IP matching one of these reverse zones will
-        # get a corresponding PTR record installed. (Not yet implemented)
+        # get a corresponding PTR record installed.
         reverse-zones:
           - 42.10.in-addr.arpa
 
