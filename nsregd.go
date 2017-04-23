@@ -99,6 +99,18 @@ func (nsup *NSUpstream) sendUpdate(records []dns.RR) bool {
 		if rr.Header().Ttl > uint32(nsup.RecordTTL.Seconds()) {
 			rr.Header().Ttl = uint32(nsup.RecordTTL.Seconds())
 		}
+
+		var ip net.IP
+		switch rr.Header().Rrtype {
+		case dns.TypeA:
+			ip = rr.(*dns.A).A
+		case dns.TypeAAAA:
+			ip = rr.(*dns.AAAA).AAAA
+		}
+
+		if inNets(ip, nsup.excludeNets) {
+			continue
+		}
 		upd.Ns = append(upd.Ns, rr)
 	}
 
