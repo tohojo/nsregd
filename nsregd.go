@@ -334,7 +334,7 @@ func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name s
 		}
 	} else {
 		/* No existing key, keep if in valid dom */
-		if !zone.isIPAllowed(remoteIP) {
+		if !inNets(remoteIP, zone.allowedNets) {
 			log.Printf("Disallowed attempt from  %s to add new key.", remoteIP)
 			setError(reply, name, dns.RcodeRefused,
 				"Remote addr not allowed to add new key")
@@ -366,17 +366,6 @@ func (zone *Zone) verifySig(m *dns.Msg, remoteIP net.IP, reply *dns.Msg) (name s
 		"Signature verification failed")
 
 	return name, false
-}
-
-func (zone *Zone) isIPAllowed(ip net.IP) bool {
-
-	for _, net := range zone.allowedNets {
-		if net.Contains(ip) {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (zone *Zone) sendUpdates(records []dns.RR) bool {
@@ -504,7 +493,7 @@ func (zone *Zone) handleRegd(w dns.ResponseWriter, r *dns.Msg) {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := getIP(rr)
 			t := dns.Type(rrtype).String()
-			if !zone.AllowAnyAddr && !zone.isIPAllowed(ip) {
+			if !zone.AllowAnyAddr && !inNets(ip, zone.allowedNets) {
 				log.Printf("Skipping %s record for %s outside allowed ranges from %s.",
 					t, ip, remoteIP)
 				continue
