@@ -811,10 +811,13 @@ func discoverZones(nameserver string) {
 
 func main() {
 
+	exitcode := 0
+
 	defer func() {
 		if !viper.GetBool("debug") {
 			recover() // suppress stack traces
 		}
+		os.Exit(exitcode)
 	}()
 
 	readConfig()
@@ -857,13 +860,14 @@ func main() {
 			servers -= 1
 		case <-int:
 			log.Println("Interrupted.")
-			os.Exit(2)
+			exitcode = 2
+			return
 		case <-term:
 			log.Println("Received TERM, exiting.")
-			os.Exit(0)
+			return
 		}
 	}
 
 	log.Printf("All registration attempts failed with non-transient errors.")
-	os.Exit(1)
+	exitcode = 1
 }

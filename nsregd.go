@@ -726,6 +726,8 @@ func main() {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
+	exitcode := 0
+
 	defer func() {
 		server4.Shutdown()
 		server6.Shutdown()
@@ -737,6 +739,7 @@ func main() {
 		if !viper.GetBool("debug") {
 			recover() // suppress stack traces
 		}
+		os.Exit(exitcode)
 	}()
 
 	log.Printf("Started. Serving %d zones.", len(Zones))
@@ -745,10 +748,11 @@ func main() {
 		switch <-sig {
 		case syscall.SIGINT:
 			log.Println("Interrupted")
-			os.Exit(2)
+			exitcode = 2
+			return
 		case syscall.SIGTERM:
 			log.Println("Received TERM, shutting down")
-			os.Exit(0)
+			return
 		case syscall.SIGHUP:
 			log.Println("Received HUP, re-reading config")
 			readConfig()
