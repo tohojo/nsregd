@@ -19,6 +19,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"reflect"
 )
 
@@ -59,4 +60,15 @@ func checkFields(i interface{}) error {
 	}
 
 	return nil
+}
+
+func inNets(ip net.IP, nets []*net.IPNet) bool {
+
+	for _, net := range nets {
+		if net.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }

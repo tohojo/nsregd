@@ -163,17 +163,6 @@ func getServer(zone string, server string, tcp bool) (*Server, bool) {
 	return nil, false
 }
 
-func excludeIP(ip net.IP) bool {
-
-	for _, net := range config.excludedNets {
-		if net.Contains(ip) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func getAddrsBuiltin() ([]Addr, error) {
 
 	var (
@@ -213,7 +202,7 @@ func getAddrsBuiltin() ([]Addr, error) {
 		case *net.IPAddr:
 			addr = Addr{IP: &net.IPNet{IP: v.IP}}
 		}
-		if !excludeIP(addr.IP.IP) {
+		if !inNets(addr.IP.IP, config.excludedNets) {
 			res = append(res, addr)
 		}
 	}
@@ -257,7 +246,7 @@ func getAddrs() ([]Addr, error) {
 	}
 	res := make([]Addr, 0, len(addrs)+len(config.extraAddrs))
 	for _, addr := range addrs {
-		if addr.Flags&skip_addr_flags == 0 && !excludeIP(addr.IPNet.IP) {
+		if addr.Flags&skip_addr_flags == 0 && !inNets(addr.IPNet.IP, config.excludedNets) {
 			res = append(res, Addr{IP: addr.IPNet,
 				Ttl: uint32(addr.ValidLft)})
 		}
@@ -295,7 +284,7 @@ func (s *Server) run() {
 				continue
 			}
 
-			if upd.Flags&skip_addr_flags != 0 || excludeIP(upd.LinkAddress.IP) {
+			if upd.Flags&skip_addr_flags != 0 || inNets(upd.LinkAddress.IP, config.excludedNets) {
 				continue
 			}
 
