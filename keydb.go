@@ -31,6 +31,7 @@ const (
 	getKey
 	refreshKey
 	expireKeys
+	writeDb
 )
 
 type keyReqType int
@@ -88,6 +89,9 @@ func (db *KeyDb) run() {
 			if _, ok := db.keys[req.key.Name]; !ok {
 				req.key.Expiry = db.getExpiry(req.ttl)
 				db.keys[req.key.Name] = req.key
+				if err := db.writeDb(); err != nil {
+					log.Printf("Error writing key DB: %s", err)
+				}
 				req.resultChan <- nil
 			} else {
 				close(req.resultChan)
@@ -103,17 +107,34 @@ func (db *KeyDb) run() {
 		case refreshKey:
 			if key, ok := db.keys[req.name]; ok {
 				key.Expiry = db.getExpiry(req.ttl)
+				if err := db.writeDb(); err != nil {
+					log.Printf("Error writing key DB: %s", err)
+				}
 				req.resultChan <- nil
 			} else {
 				close(req.resultChan)
 			}
-
 		case expireKeys:
+			expired := false
 			for name, key := range db.keys {
 				if key.Expiry.Before(time.Now()) {
+					expired = true
+					log.Printf("Key for %s expired\n", key.Name)
 					delete(db.keys, name)
 					go db.expireCallback(name)
 				}
+			}
+			if expired {
+				if err := db.writeDb(); err != nil {
+					log.Printf("Error writing key DB: %s", err)
+				}
+			}
+		case writeDb:
+			if err := db.writeDb(); err != nil {
+				log.Printf("Error writing key DB: %s", err)
+				close(req.resultChan)
+			} else {
+				req.resultChan <- nil
 			}
 		}
 	}
@@ -155,15 +176,13 @@ func NewKeyDb(filename string, maxttl uint32, callback func(name string) bool) (
 func (db *KeyDb) Stop() {
 	close(db.queue)
 
-	err := db.Write()
+	err := db.writeDb()
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func (db *KeyDb) Write() error {
-
-	//fixme := error // needs concurrency fix
+func (db *KeyDb) writeDb() error {
 
 	if db.keyfile != "" {
 		data, err := json.Marshal(db.keys)
@@ -219,6 +238,15 @@ func (db *KeyDb) Refresh(name string, ttl uint32) bool {
 		reqType:    refreshKey,
 		name:       name,
 		ttl:        ttl,
+		resultChan: make(chan *Key)}
+	db.queue <- req
+	_, ok := <-req.resultChan
+	return ok
+}
+
+func (db *KeyDb) Write() bool {
+	req := keyRequest{
+		reqType:    writeDb,
 		resultChan: make(chan *Key)}
 	db.queue <- req
 	_, ok := <-req.resultChan
