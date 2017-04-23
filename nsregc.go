@@ -646,7 +646,7 @@ func readConfig() {
 		case viper.ConfigFileNotFoundError:
 			log.Println("No config file found. Using defaults.")
 			dir := filepath.Join(os.Getenv("HOME"), ".nsregc")
-			confdir, err := filepath.Abs(dir)
+			confdir, err = filepath.Abs(dir)
 			if err != nil {
 				confdir = filepath.Clean(dir)
 			}
