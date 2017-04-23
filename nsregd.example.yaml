@@ -92,6 +92,11 @@ zones:
         # Exclude records in these subnets. Can be used to, e.g., filter out
         # private addresses from public DNS (but keep them in a private view
         # configured as another upstream).
+        #
+        # Note that any records excluded by this mechanism will still be
+        # reported as successfully installed to the client. So to disallow nets
+        # entirely, it is better to tweak allowed-nets for the whole zone (and
+        # disable allow-any-net).
         exclude-nets:
           - 10.0.0.0/8
           - fd00::/8
