@@ -58,6 +58,7 @@ type Zone struct {
 type Upstream interface {
 	sendUpdate(records []dns.RR) bool
 	Init() error
+	Keep() bool
 }
 
 type NSUpstream struct {
@@ -156,6 +157,10 @@ func (nsup *NSUpstream) Init() error {
 	nsup.client = c
 
 	return nil
+}
+
+func (nsup *NSUpstream) Keep() bool {
+	return nsup.KeepRecords
 }
 
 func (zone *Zone) Init() error {
@@ -384,7 +389,9 @@ func (zone *Zone) removeName(name string) bool {
 	records[0] = &dns.ANY{Hdr: dns.RR_Header{Name: name, Ttl: 0, Rrtype: dns.TypeANY, Class: dns.ClassANY}}
 
 	for _, u := range zone.upstreams {
-		success = success && u.sendUpdate(records)
+		if !u.Keep() {
+			success = success && u.sendUpdate(records)
+		}
 	}
 
 	zone.cache.removeName(name)
