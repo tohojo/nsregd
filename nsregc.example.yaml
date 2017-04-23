@@ -45,7 +45,6 @@
 #extra-addresses:
 #  - 172.12.12.12
 
-
 # Whether to keep records after shutting down (if disabled, a removal update
 # message will be sent on shutdown for any registered records).
 #keep-records: false
