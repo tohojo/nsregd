@@ -754,8 +754,10 @@ func getNameserver() string {
 	return nameserver
 }
 
-func discoverZones(nameserver string) {
-	log.Println("Discovering zones to register with")
+func discoverZones() error {
+	nameserver := getNameserver()
+
+	log.Printf("Discovering zones to register with. Using nameserver %s.", nameserver)
 
 	// From RFC6763: Discover available zones by looking for PTR records in
 	// .local as well as in each of the reverse zones for the network
@@ -785,8 +787,7 @@ func discoverZones(nameserver string) {
 		m.SetQuestion(dns.Fqdn(discover_prefix+"."+d), dns.TypePTR)
 		r, _, err := c.Exchange(m, nameserver)
 		if err != nil {
-			log.Printf("Error while discovering zones: %s", err)
-			continue
+			return err
 		}
 
 		if *printf {
@@ -807,6 +808,8 @@ func discoverZones(nameserver string) {
 		}
 	}
 
+	return nil
+
 }
 
 func main() {
@@ -823,16 +826,22 @@ func main() {
 	readConfig()
 	readKeyFile()
 
-	nameserver := getNameserver()
-
-	log.Printf("Using nameserver %s", nameserver)
-
 	if viper.GetBool("discover-zones") {
-		discoverZones(nameserver)
+		if err := discoverZones(); err != nil {
+			log.Printf("Error while discovering zones: '%s'. Waiting %s and trying again.", err, config.Timeout)
+			time.Sleep(config.Timeout)
+			err = discoverZones()
+			if err != nil {
+				log.Printf("Second attempt to discover zones failed: '%s'. Giving up.", err)
+			}
+		}
 	}
 
 	servers := 0
 	exit := make(chan bool, len(config.Zones))
+	nameserver := getNameserver()
+	log.Printf("Using nameserver %s", nameserver)
+
 	for _, zone := range config.Zones {
 		server, ok := getServer(dns.Fqdn(zone), nameserver, viper.GetBool("dns-tcp"))
 		if !ok {
