@@ -48,16 +48,20 @@ TSIG-authenticated updates are supported.
 
 The `nsregc` client included here is an implementation of a client that
 will speak to the daemon as per the description above and register any
-addresses found on the local machine with a configured name. The client
-is given one or more zones to register with, and will attempt to find a
-compatible `nsregd` server by querying for a SRV record at the name
-`_nsreg._tcp.<zone>`. If such a server is found, the client will register
-A and AAAA records corresponding to each of the local addresses of the
-machine, and maintain these registrations until killed. In addition, the
-client will attempt to listen for address addition and removal events
-via the Linux Netlink interface, and update the records accordingly. The
-TTL for the created records is taken from the address validity as
-reported by the kernel, clamped to a configurable maximum value.
+addresses found on the local machine with a configured name (which
+defaults to the system hostname). The client is given one or more zones
+to register with, and will attempt to find a compatible `nsregd` server
+by querying for a SRV record at the name `_nsreg._tcp.<zone>`. It can
+auto-discover the zone(s) to register in using the mechanism specified
+in section 11 of RFC6763.
+
+If a suitable server is found, the client will register A and AAAA
+records corresponding to each of the local addresses of the machine, and
+maintain these registrations until killed. In addition, the client will
+attempt to listen for address addition and removal events via the Linux
+Netlink interface, and update the records accordingly. The TTL for the
+created records is taken from the address validity as reported by the
+kernel, clamped to a configurable maximum value.
 
 ## Building
 Both `nsregd` and `nsregc` are written in Go. To build, you will need a
@@ -75,23 +79,36 @@ To run the `nsregd` daemon:
 2. Generate a TSIG secret and configure the authoritative DNS server for
    the parent zone (`example.org` in the example above) to allow updates
    to the registration zone with this secret.
-3. Edit `nsregd.conf.example` to contain the chosen zone name and to point
-   at the right upstream server and set the TSIG secret.
-4. Run `nsregd` with `-conffile` parameter pointing to the right file.
-5. Add a SRV record at `_nsreg._tcp.dynamic.example.org` pointing to the
+3. Copy `nsregd.example.yaml` to `/etc/nsregd` and edit it to contain
+   the chosen zone name and to point at the right upstream server and
+   set the TSIG secret.
+4. Add a SRV record at `_nsreg._tcp.dynamic.example.org` pointing to the
    hostname and port that `nsregd` is listening on.
+5. (Optional) Add an auto-discovery PTR record for
+   `r._dns-sd._udp.local.`. This needs to be resolvable by the clients
+   and point to the configured base domain (i.e.,
+   `dynamic.example.org`).
+6. Run `nsregd`.
+
+The `nsregd` daemon will re-read its configuration upon receiving a
+SIGHUP.
 
 To run the `nsregc` client:
-1. Copy `nsregc.example.yaml` to ~/.nsregc/nsregc.yaml and edit it to
-   set the name the client should try to claim and the interface(s) to
-   get IP addresses from.
-2. Run `nsregc` with the zone(s) you wish to register with as command
-   line parameters.
+
+If you configured the auto-discovery PTR record above correctly,
+`nsregc` can run with no configuration, in which case it will generate a
+key, use the system hostname as the name to register, and create records
+for all IP addresses found on the system. If this is not the behaviour
+you want, follow these steps to modify the configuration:
+
+1. Copy `nsregc.example.yaml` to `~/.nsregc/nsregc.yaml` and edit it to
+   suit your preferences.
+2. Run `nsregc`. Supply the zone(s) you wish to register with as command
+   line parameters or in the config file.
 
 For testing, it is possible to point `nsregc` directly at `nsregd` for
 the initial query (using the --dns-server option and setting --dns-tcp),
-since `nsregd` will reply with its own address to any
-SRV queries.
+since `nsregd` will reply with its own address to any SRV queries.
 
 ## Limitations
 
@@ -102,20 +119,12 @@ recommended to configure your authoritative DNS server to only allow
 
 Other limitations, in no particular order:
 
-- There is currently no way for the client to discover which zone to
-  register with on its own. Getting the zone name from (e.g.) DHCP would
-  be a way to deal with this.
-
 - If communication between `nsregd` and the upstream server(s) fail, no
   retries are currently performed. If the failure occurs while the
   client is first registering, the failure will be reported to the
   client, but if the failure occurs while entries are being
   automatically expired, it can result in records being left behind in
   the upstream DNS.
-
-- There is not a lot of error checking done on the configuration values.
-  If you get them wrong, the respective binary is likely to crash on
-  you.
 
 - If subscribing to netlink fails, the client will be oblivious to any
   new addresses that appear on the configured interface(s).
