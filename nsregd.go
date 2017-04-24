@@ -493,6 +493,8 @@ func configureZone(zonename string, conf *viper.Viper) {
 		switch u["type"] {
 		case "nsupdate":
 			ups = new(NSUpstream)
+		case "unbound":
+			ups = new(UnboundUpstream)
 		case nil:
 			log.Printf("Zone %s: Missing upstream type", zonename)
 			return
