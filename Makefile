@@ -1,8 +1,8 @@
 all: nsregd nsregc
 
 
-nsregd: nsregd.go keydb.go cache.go util.go
-	go build nsregd.go keydb.go cache.go util.go
+nsregd: nsregd.go keydb.go cache.go util.go upstreams.go
+	go build nsregd.go keydb.go cache.go util.go upstreams.go
 
 nsregc: nsregc.go cache.go util.go
 	go build nsregc.go cache.go util.go
