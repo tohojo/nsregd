@@ -51,6 +51,13 @@ zones:
         #
         #  nsupdate: An upstream that speaks the RFC2136 dynamic DNS update
         #            protocol.
+        #
+        #  unbound:  An Unbound server; nsregd will speak to the unbound control
+        #            socket and create local zone data for each record.
+        #
+        #  disabled: Set type to disabled to completely skip an upstream
+        #            definition. Useful to temporarily disable a definition
+        #            without having to comment everything out.
         type: nsupdate
 
         # Hostname and port to find the upstream server on, whether to speak TCP
@@ -99,4 +106,59 @@ zones:
         # disable allow-any-net).
         exclude-nets:
           - 10.0.0.0/8
+          - fd00::/8
+
+      -
+        # An example unbound upstream
+        type: unbound
+
+        # Hostname and port where the Unbound control socket can be found
+        hostname: localhost
+        port: 8953
+
+        # The client public and private keys and the server public key. These
+        # must be the same ones that are specified in unbound.conf, and are
+        # typically created by the unbound-control-setup utility.
+        #
+        # These need to be specified with their absolute paths.
+        client-cert: /etc/unbound/unbound_control.pem
+        client-key: /etc/unbound/unbound_control.key
+        server-cert: /etc/unbound/unbound_server.pem
+
+        # The server name, as specified in the certificate. If the certificate
+        # is created by unbound-control-setup, this will be 'unbound'.
+        server-name: unbound
+
+        # The type of local zone to create in unbound. See unbound.conf(5).
+        # Using 'typetransparent' is useful if you put A records into unbound
+        # and AAAA records into global DNS (see exclude-nets example setting for
+        # this below).
+        #
+        # The zone will be created on startup with the specified type. Reverse
+        # zones are NOT created, since unbound creates local zones of type
+        # 'static' for all remote zones corresponding to the RFC1918 address
+        # space.
+        #
+        # Set to 'none' to disable creation of a local zone. If local zone
+        # creation is disabled and no corresponding zone is configured in the
+        # Unbound config file, unbound will automatically create a local zone of
+        # type 'transparent' for each name created.
+        zone-type: typetransparent
+
+        # Same as above for the nsupdate upstream
+        timeout: 1s
+        record-ttl: 60s
+        keep-records: false
+        reverse-zones:
+          - 42.10.in-addr.arpa
+
+        # Exclude records in these subnets (see explanation above for nsupdate
+        # upstream example config).
+        #
+        # This example excludes all IPv6 addresses, which is useful for a setup
+        # where the IPv4 RFC1918 addresses are kept in the Unbound server local
+        # zones (which serve the local subnet) and public IPv6 addresses are
+        # kept in the global DNS.
+        exclude-nets:
+          - 2000::/4
           - fd00::/8
