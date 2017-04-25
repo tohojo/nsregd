@@ -88,7 +88,7 @@ func (zone *Zone) Init() error {
 
 	dns.HandleFunc(zone.Name, zone.handleRegd)
 
-	log.Printf("Configured zone %s", zone.Name)
+	log.Printf("Zone %s: Configuration complete", zone.Name)
 	return nil
 }
 
@@ -110,7 +110,7 @@ func (zone *Zone) UpdateConfig(other *Zone) error {
 	zone.allowedNets = other.allowedNets
 	zone.upstreams = other.upstreams
 
-	log.Printf("Updated config for zone %s", zone.Name)
+	log.Printf("Zone %s: Configuration updated", zone.Name)
 	return nil
 }
 
@@ -513,13 +513,14 @@ func configureZone(zonename string, conf *viper.Viper) {
 			DecodeHook:       mapstructure.StringToTimeDurationHookFunc(),
 		})
 		if err = dec.Decode(u); err == nil {
-			err = ups.Init()
+			err = ups.Init(zonename)
 		}
 		if err != nil {
 			log.Printf("Zone %s: Error parsing upstream type: %s",
 				zonename, err)
 			return
 		}
+		log.Printf("Zone %s: Configured upstream: %s", zonename, ups)
 		zone.upstreams = append(zone.upstreams, ups)
 	}
 

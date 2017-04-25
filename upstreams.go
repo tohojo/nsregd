@@ -20,8 +20,9 @@ const (
 
 type Upstream interface {
 	SendUpdate(records []dns.RR) bool
-	Init() error
+	Init(zone string) error
 	Keep() bool
+	String() string
 }
 
 type NSUpstream struct {
@@ -165,7 +166,7 @@ func (nsup *NSUpstream) SendUpdate(records []dns.RR) bool {
 	return true
 }
 
-func (nsup *NSUpstream) Init() error {
+func (nsup *NSUpstream) Init(zone string) error {
 
 	if err := checkFields(nsup); err != nil {
 		return err
@@ -200,6 +201,12 @@ func (nsup *NSUpstream) Keep() bool {
 	return nsup.KeepRecords
 }
 
+func (nsup *NSUpstream) String() string {
+	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
+	return fmt.Sprintf("nsupdate (zone: %s hostname: %s)",
+		nsup.Zone, hostname)
+}
+
 type UnboundUpstream struct {
 	Hostname    string        `mapstructure:"hostname"`
 	Port        uint16        `mapstructure:"port"`
@@ -215,7 +222,7 @@ type UnboundUpstream struct {
 	tlsconfig   tls.Config
 }
 
-func (unbound *UnboundUpstream) Init() error {
+func (unbound *UnboundUpstream) Init(zone string) error {
 
 	if err := checkFields(unbound); err != nil {
 		return err
@@ -273,12 +280,22 @@ func (unbound *UnboundUpstream) sendCmd(cmd string, extra []string) error {
 		fmt.Printf("Unbound cmd: %s", buf.String())
 	}
 
+func (unbound *UnboundUpstream) String() string {
+	hostname := unbound.Hostname + ":" + strconv.Itoa(int(unbound.Port))
+	return fmt.Sprintf("unbound (%s)", hostname)
+}
+
 	dialer := net.Dialer{Timeout: unbound.Timeout}
 	conn, err := tls.DialWithDialer(&dialer, "tcp", hostname, &unbound.tlsconfig)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+
+func (unbound *UnboundUpstream) String() string {
+	hostname := unbound.Hostname + ":" + strconv.Itoa(int(unbound.Port))
+	return fmt.Sprintf("unbound (%s)", hostname)
+}
 
 	conn.Write(buf.Bytes())
 
