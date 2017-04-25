@@ -127,6 +127,11 @@ func (nsup *NSUpstream) SendUpdate(records []dns.RR) bool {
 	upd.Ns = filterRRs(records, nsup.RecordTTL, nsup.excludeNets)
 	upd.SetTsig(nsup.TSigName, dns.HmacSHA256, 300, time.Now().Unix())
 
+	if len(upd.Ns) == 0 {
+		log.Printf("No names to send to %s", nsup.Hostname)
+		return true
+	}
+
 	hostname := nsup.Hostname + ":" + strconv.Itoa(int(nsup.Port))
 
 	log.Printf("Sending nsupdate to %s with %d names", hostname, len(upd.Ns))
