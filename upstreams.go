@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	unbound_prefix = "UBCT1 "
+	unbound_prefix = "UBCT1"
 )
 
 type Upstream interface {
@@ -64,6 +64,30 @@ func filterRRs(records []dns.RR, maxTtl time.Duration, filterIPs []*net.IPNet) [
 	return res
 }
 
+func genReverse(rr dns.RR) *dns.PTR {
+	var ip net.IP
+	switch rr.Header().Rrtype {
+	case dns.TypeA:
+		ip = rr.(*dns.A).A
+	case dns.TypeAAAA:
+		ip = rr.(*dns.AAAA).AAAA
+	default:
+		return nil
+	}
+
+	if rev, err := dns.ReverseAddr(ip.String()); err == nil {
+		return &dns.PTR{
+			Hdr: dns.RR_Header{
+				Name:   rev,
+				Rrtype: dns.TypePTR,
+				Ttl:    rr.Header().Ttl,
+				Class:  rr.Header().Class},
+			Ptr: rr.Header().Name}
+	}
+
+	return nil
+}
+
 func (nsup *NSUpstream) checkReverse(records []dns.RR) {
 	for _, revzone := range nsup.ReverseZones {
 		revzone = dns.Fqdn(revzone)
@@ -72,26 +96,10 @@ func (nsup *NSUpstream) checkReverse(records []dns.RR) {
 		upd.SetUpdate(revzone)
 
 		for _, orig := range records {
-			rr := dns.Copy(orig)
+			rr := genReverse(orig)
 
-			var ip net.IP
-			switch rr.Header().Rrtype {
-			case dns.TypeA:
-				ip = rr.(*dns.A).A
-			case dns.TypeAAAA:
-				ip = rr.(*dns.AAAA).AAAA
-			}
-
-			rev, err := dns.ReverseAddr(ip.String())
-			if err == nil && dns.IsSubDomain(revzone, rev) {
-				newrr := &dns.PTR{
-					Hdr: dns.RR_Header{
-						Name:   rev,
-						Rrtype: dns.TypePTR,
-						Ttl:    rr.Header().Ttl,
-						Class:  rr.Header().Class},
-					Ptr: rr.Header().Name}
-				upd.Ns = append(upd.Ns, newrr)
+			if rr != nil && dns.IsSubDomain(revzone, rr.Ptr) {
+				upd.Ns = append(upd.Ns, rr)
 			}
 		}
 
@@ -286,35 +294,52 @@ func (unbound *UnboundUpstream) sendCmd(cmd string, extra []string) error {
 }
 
 func (unbound *UnboundUpstream) SendUpdate(records []dns.RR) bool {
-	var name string
 
 	rrs := filterRRs(records, unbound.RecordTTL, unbound.excludeNets)
-	data := make([]string, 0, len(rrs))
-	for _, rr := range rrs {
-		name = rr.Header().Name
-		if rr.Header().Ttl > 0 {
-			data = append(data, rr.String())
-		}
-	}
-
-	if len(name) == 0 {
+	if len(rrs) == 0 {
 		log.Printf("No records to send to unbound")
 		return true
 	}
 
-	err := unbound.sendCmd(fmt.Sprintf("local_data_remove %s", name), []string{})
-	if err != nil {
-		log.Printf("Error removing name from unbound: %s", err)
+	// We need to remove all names and add them back, since Unbound has no
+	// facility for removing a single record. Since there are both forward
+	// and reverse addresses, we'll collect a list of names to remove which
+	// includes the forward name and all the reverse names. These are always
+	// removed, and all records that are not removals (i.e. with TTL>0) will
+	// get added back afterwards.
+	add_records := make([]string, 0, len(rrs)*2)
+	remove_names := make([]string, 0, len(rrs)+1)
+	for _, rr := range rrs {
+		if !stringInSlice(rr.Header().Name, remove_names) {
+			remove_names = append(remove_names, rr.Header().Name)
+		}
+
+		if rr.Header().Ttl > 0 {
+			add_records = append(add_records, rr.String())
+		}
+
+		if rev := genReverse(rr); rev != nil {
+			if rev.Header().Ttl > 0 {
+				add_records = append(add_records, rev.String())
+			}
+			remove_names = append(remove_names, rev.Header().Name)
+		}
 	}
 
-	if len(data) == 0 {
+	err := unbound.sendCmd("local_datas_remove", remove_names)
+	if err != nil {
+		log.Printf("Error removing names from unbound: %s", err)
+	}
+
+	if len(add_records) == 0 {
+		// All records were removals
 		return true
 	}
 
 	log.Printf("Sending update to Unbound server at %s with %d names",
-		unbound.Hostname, len(data))
+		unbound.Hostname, len(add_records))
 
-	err = unbound.sendCmd("local_datas", data)
+	err = unbound.sendCmd("local_datas", add_records)
 	if err != nil {
 		log.Printf("Error communicating with unbound: %s", err)
 		return false
