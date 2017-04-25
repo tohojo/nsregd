@@ -99,7 +99,7 @@ func (nsup *NSUpstream) checkReverse(records []dns.RR) {
 		for _, orig := range records {
 			rr := genReverse(orig)
 
-			if rr != nil && dns.IsSubDomain(revzone, rr.Ptr) {
+			if rr != nil && dns.IsSubDomain(revzone, rr.Header().Name) {
 				upd.Ns = append(upd.Ns, rr)
 			}
 		}
