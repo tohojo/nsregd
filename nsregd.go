@@ -495,6 +495,8 @@ func configureZone(zonename string, conf *viper.Viper) {
 			ups = new(NSUpstream)
 		case "unbound":
 			ups = new(UnboundUpstream)
+		case "disabled":
+			continue
 		case nil:
 			log.Printf("Zone %s: Missing upstream type", zonename)
 			return
