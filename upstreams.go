@@ -250,8 +250,20 @@ func (unbound *UnboundUpstream) Keep() bool {
 	return unbound.KeepRecords
 }
 
-func (unbound *UnboundUpstream) sendBuf(buf []byte) error {
+func (unbound *UnboundUpstream) sendCmd(cmd string, extra []string) error {
+	var buf bytes.Buffer
+
+	buf.WriteString(fmt.Sprintf("%s %s\n", unbound_prefix, cmd))
+
+	for _, s := range extra {
+		buf.WriteString(fmt.Sprintf("%s\n", s))
+	}
+
 	hostname := unbound.Hostname + ":" + strconv.Itoa(int(unbound.Port))
+
+	if *printf {
+		fmt.Printf("Unbound cmd: %s", buf.String())
+	}
 
 	dialer := net.Dialer{Timeout: unbound.Timeout}
 	conn, err := tls.DialWithDialer(&dialer, "tcp", hostname, &unbound.tlsconfig)
@@ -260,7 +272,7 @@ func (unbound *UnboundUpstream) sendBuf(buf []byte) error {
 	}
 	defer conn.Close()
 
-	conn.Write(buf)
+	conn.Write(buf.Bytes())
 
 	rb := make([]byte, 0, 1024)
 	_, err = conn.Read(rb)
@@ -274,19 +286,35 @@ func (unbound *UnboundUpstream) sendBuf(buf []byte) error {
 }
 
 func (unbound *UnboundUpstream) SendUpdate(records []dns.RR) bool {
-	var buf bytes.Buffer
-
-	buf.WriteString(fmt.Sprintf("%s local_datas\n", unbound_prefix))
+	var name string
 
 	rrs := filterRRs(records, unbound.RecordTTL, unbound.excludeNets)
+	data := make([]string, 0, len(rrs))
 	for _, rr := range rrs {
-		buf.WriteString(fmt.Sprintf("%s\n", rr))
+		name = rr.Header().Name
+		if rr.Header().Ttl > 0 {
+			data = append(data, rr.String())
+		}
+	}
+
+	if len(name) == 0 {
+		log.Printf("No records to send to unbound")
+		return true
+	}
+
+	err := unbound.sendCmd(fmt.Sprintf("local_data_remove %s", name), []string{})
+	if err != nil {
+		log.Printf("Error removing name from unbound: %s", err)
+	}
+
+	if len(data) == 0 {
+		return true
 	}
 
 	log.Printf("Sending update to Unbound server at %s with %d names",
-		unbound.Hostname, len(rrs))
+		unbound.Hostname, len(data))
 
-	err := unbound.sendBuf(buf.Bytes())
+	err = unbound.sendCmd("local_datas", data)
 	if err != nil {
 		log.Printf("Error communicating with unbound: %s", err)
 		return false
