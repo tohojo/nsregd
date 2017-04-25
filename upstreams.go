@@ -208,18 +208,20 @@ func (nsup *NSUpstream) String() string {
 }
 
 type UnboundUpstream struct {
-	Hostname    string        `mapstructure:"hostname"`
-	Port        uint16        `mapstructure:"port"`
-	ClientCert  string        `mapstructure:"client-cert"`
-	ClientKey   string        `mapstructure:"client-key"`
-	ServerCert  string        `mapstructure:"server-cert"`
-	ServerName  string        `mapstructure:"server-name"`
-	Timeout     time.Duration `mapstructure:"timeout"`
-	RecordTTL   time.Duration `mapstructure:"record-ttl"`
-	KeepRecords bool          `mapstructure:"keep-records"`
-	ExcludeNets []string      `mapstructure:"exclude-nets"`
-	excludeNets []*net.IPNet
-	tlsconfig   tls.Config
+	Hostname     string        `mapstructure:"hostname"`
+	Port         uint16        `mapstructure:"port"`
+	ClientCert   string        `mapstructure:"client-cert"`
+	ClientKey    string        `mapstructure:"client-key"`
+	ServerCert   string        `mapstructure:"server-cert"`
+	ServerName   string        `mapstructure:"server-name"`
+	ZoneType     string        `mapstructure:"zone-type"`
+	ReverseZones []string      `mapstructure:"reverse-zones"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	RecordTTL    time.Duration `mapstructure:"record-ttl"`
+	KeepRecords  bool          `mapstructure:"keep-records"`
+	ExcludeNets  []string      `mapstructure:"exclude-nets"`
+	excludeNets  []*net.IPNet
+	tlsconfig    tls.Config
 }
 
 func (unbound *UnboundUpstream) Init(zone string) error {
@@ -258,11 +260,29 @@ func (unbound *UnboundUpstream) Init(zone string) error {
 		RootCAs:      rootCA}
 	unbound.tlsconfig.BuildNameToCertificate()
 
+	if unbound.ZoneType != "none" {
+		log.Printf("Creating local unbound zone of type %s for %s",
+			unbound.ZoneType, zone)
+		err = unbound.sendCmd(
+			fmt.Sprintf("local_zone %s %s", zone, unbound.ZoneType),
+			nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Printf("Configured unbound upstream for zone %s", zone)
+
 	return nil
 }
 
 func (unbound *UnboundUpstream) Keep() bool {
 	return unbound.KeepRecords
+}
+
+func (unbound *UnboundUpstream) String() string {
+	hostname := unbound.Hostname + ":" + strconv.Itoa(int(unbound.Port))
+	return fmt.Sprintf("unbound (%s)", hostname)
 }
 
 func (unbound *UnboundUpstream) sendCmd(cmd string, extra []string) error {
@@ -280,22 +300,12 @@ func (unbound *UnboundUpstream) sendCmd(cmd string, extra []string) error {
 		fmt.Printf("Unbound cmd: %s", buf.String())
 	}
 
-func (unbound *UnboundUpstream) String() string {
-	hostname := unbound.Hostname + ":" + strconv.Itoa(int(unbound.Port))
-	return fmt.Sprintf("unbound (%s)", hostname)
-}
-
 	dialer := net.Dialer{Timeout: unbound.Timeout}
 	conn, err := tls.DialWithDialer(&dialer, "tcp", hostname, &unbound.tlsconfig)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-
-func (unbound *UnboundUpstream) String() string {
-	hostname := unbound.Hostname + ":" + strconv.Itoa(int(unbound.Port))
-	return fmt.Sprintf("unbound (%s)", hostname)
-}
 
 	conn.Write(buf.Bytes())
 
@@ -336,10 +346,15 @@ func (unbound *UnboundUpstream) SendUpdate(records []dns.RR) bool {
 		}
 
 		if rev := genReverse(rr); rev != nil {
-			if rev.Header().Ttl > 0 {
-				add_records = append(add_records, rev.String())
+			for _, z := range unbound.ReverseZones {
+				if dns.IsSubDomain(z, rev.Header().Name) {
+					if rev.Header().Ttl > 0 {
+						add_records = append(add_records, rev.String())
+					}
+					remove_names = append(remove_names, rev.Header().Name)
+					break
+				}
 			}
-			remove_names = append(remove_names, rev.Header().Name)
 		}
 	}
 
