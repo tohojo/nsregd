@@ -212,6 +212,16 @@ func getAddrsBuiltin() ([]Addr, error) {
 	return res, nil
 }
 
+func ipInSlice(ip net.IP, addrs []Addr) bool {
+
+	for _, a := range addrs {
+		if bytes.Compare(ip, a.IP.IP) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func getAddrs() ([]Addr, error) {
 	var (
 		addrs []netlink.Addr
@@ -246,13 +256,15 @@ func getAddrs() ([]Addr, error) {
 	}
 	res := make([]Addr, 0, len(addrs)+len(config.extraAddrs))
 	for _, addr := range addrs {
-		if addr.Flags&skip_addr_flags == 0 && !inNets(addr.IPNet.IP, config.excludedNets) {
+		if addr.Flags&skip_addr_flags == 0 && !inNets(addr.IPNet.IP, config.excludedNets) && !ipInSlice(addr.IPNet.IP, res) {
 			res = append(res, Addr{IP: addr.IPNet,
 				Ttl: uint32(addr.ValidLft)})
 		}
 	}
 	for _, addr := range config.extraAddrs {
-		res = append(res, Addr{IP: addr})
+		if !ipInSlice(addr.IP, res) {
+			res = append(res, Addr{IP: addr})
+		}
 	}
 	return res, nil
 }
