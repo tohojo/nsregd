@@ -40,6 +40,8 @@ var (
 	printf   *bool
 	conffile *string
 	Zones    map[string]*Zone
+	server4  *dns.Server
+	server6  *dns.Server
 )
 
 type Zone struct {
@@ -596,19 +598,29 @@ func readConfig() {
 	}
 }
 
+func listen() {
+	laddr := viper.GetString("listen-addr") + ":" + strconv.Itoa(viper.GetInt("listen-port"))
+
+	if (server4 != nil) {
+		server4.Shutdown()
+	}
+	server4 = &dns.Server{Addr: laddr, Net: "tcp4"}
+	log.Printf("Starting server on %s (tcp4)", laddr)
+	go serve(server4)
+
+	if (server6 != nil) {
+		server6.Shutdown()
+	}
+	server6 = &dns.Server{Addr: laddr, Net: "tcp6"}
+	log.Printf("Starting server on %s (tcp6)", laddr)
+	go serve(server6)
+}
+
 func main() {
 
 	initConfig()
 	readConfig()
-
-	laddr := viper.GetString("listen-addr") + ":" + strconv.Itoa(viper.GetInt("listen-port"))
-	server4 := &dns.Server{Addr: laddr, Net: "tcp4"}
-	log.Printf("Starting server on %s (tcp4)", laddr)
-	go serve(server4)
-
-	server6 := &dns.Server{Addr: laddr, Net: "tcp6"}
-	log.Printf("Starting server on %s (tcp6)", laddr)
-	go serve(server6)
+	listen()
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -643,6 +655,7 @@ func main() {
 		case syscall.SIGHUP:
 			log.Println("Received HUP, re-reading config")
 			readConfig()
+			listen()
 		}
 	}
 
