@@ -314,8 +314,16 @@ func (s *Server) run() {
 				m.Insert([]dns.RR{rr})
 				s.send(m)
 			} else {
+				if addrs, err := getAddrs(); err == nil {
+					if ipInSlice(upd.LinkAddress.IP, addrs) {
+						// IP still exists on another interface, don't send removal
+						continue
+					}
+				}
+
 				log.Printf("Lost address %s on interface %s",
 					upd.LinkAddress.IP, ifname)
+
 				m := new(dns.Msg)
 				m.SetUpdate(s.Zone)
 
