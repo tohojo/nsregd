@@ -271,8 +271,6 @@ func (unbound *UnboundUpstream) Init(zone string) error {
 		}
 	}
 
-	log.Printf("Configured unbound upstream for zone %s", zone)
-
 	return nil
 }
 
